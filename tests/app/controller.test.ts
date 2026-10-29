@@ -130,3 +130,78 @@ describe("RecorderController", () => {
     expect(await c.setRecordingsDir(join(base, "Other"))).toMatch(/after this recording stops/);
   });
 });
+
+describe("RecorderController: calls linked to Solace (Step 5) and the hand-off to the queue (Step 2)", () => {
+  const SID = "cmh2x9k0a0001qz8v7y6t5r4e";
+  const SESSION = { sessionId: SID, dialMode: "self_dial" as const, sendBy: "2026-11-01T03:00:00.000Z" };
+
+  function makeWithSaved(saved: unknown[]) {
+    return new RecorderController({
+      userDataDir: join(base, "userData"),
+      documentsDir: join(base, "Documents"),
+      env: {},
+      appVersion: "0.1.0",
+      onStateChange: (s) => states.push(s),
+      onCallSaved: async (call) => void saved.push(call),
+    });
+  }
+
+  it("records an armed Solace session under the session id and hands it to the queue", async () => {
+    const saved: any[] = [];
+    const c = makeWithSaved(saved);
+    await c.init();
+    c.armLinkedCall(SESSION);
+    const b = await c.beginCall(MIC);
+    expect(b).toEqual({ ok: true, callId: SID, linked: true, dialMode: "self_dial" });
+    c.noteCaptureStarted();
+    await c.endCall(SID, 3000);
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatchObject({ id: SID, folder: join(recordings(), SID), session: SESSION });
+    expect(saved[0].endedAtMs).toBeGreaterThanOrEqual(saved[0].startedAtMs);
+    const meta = JSON.parse(await readFile(join(recordings(), SID, `${SID}.call.json`), "utf8"));
+    expect(meta.session).toEqual({ session_id: SID, dial_mode: "self_dial", send_by: SESSION.sendBy });
+  });
+
+  it("records a call without a session as local only, and the next call is local again", async () => {
+    const saved: any[] = [];
+    const c = makeWithSaved(saved);
+    await c.init();
+    const b = await c.beginCall(MIC);
+    expect(b).toMatchObject({ ok: true, linked: false, dialMode: null });
+    if (!b.ok) return;
+    expect(b.callId).not.toBe(SID);
+    c.noteCaptureStarted();
+    await c.endCall(b.callId, 1000);
+    expect(saved[0]).toMatchObject({ id: b.callId, session: null });
+  });
+
+  it("drops an armed session that never started (e.g. the mic was blocked)", async () => {
+    const c = makeWithSaved([]);
+    await c.init();
+    c.armLinkedCall(SESSION, Date.now() - 120_000);
+    const b = await c.beginCall(MIC);
+    expect(b).toMatchObject({ ok: true, linked: false });
+  });
+
+  it("hands a crash-recovered Solace call to the queue with its session", async () => {
+    const saved: any[] = [];
+    const c = makeWithSaved(saved);
+    await c.init();
+    c.armLinkedCall(SESSION);
+    const b = await c.beginCall(MIC);
+    if (!b.ok) throw new Error("start failed");
+    await c.appendChunk(b.callId, "left", new Uint8Array([1, 2, 3]).buffer);
+    await c.recorderLost();
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatchObject({ id: SID, session: SESSION });
+  });
+
+  it("knows a session already has a call folder", async () => {
+    const c = makeWithSaved([]);
+    await c.init();
+    expect(c.hasCall(SID)).toBe(false);
+    await mkdir(join(recordings(), SID), { recursive: true });
+    expect(c.hasCall(SID)).toBe(true);
+    expect(c.hasCall("..")).toBe(true);
+  });
+});

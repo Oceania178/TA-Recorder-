@@ -24,6 +24,8 @@ export interface CallMeta {
   mic_processing: MicProcessing | null;
   files: { stereo: string; left: string; right: string };
   app_version: string | null;
+  /** The Solace session this call belongs to (Step 5), or null/absent for a local-only call (D-82). No ticket here. */
+  session?: { session_id: string; dial_mode: "3cx" | "self_dial"; send_by: string } | null;
 }
 
 /** Write via a temp file and rename, so a crash never leaves half a JSON file. */

@@ -39,7 +39,8 @@ describe("recoverLeftovers", () => {
 
     const result = await recoverLeftovers(root);
 
-    expect(result.recovered).toEqual([{ callId: ID, folder: join(root, ID) }]);
+    expect(result.recovered).toMatchObject([{ callId: ID, folder: join(root, ID), session: null }]);
+    expect(result.recovered[0].endedAtMs).toBeGreaterThanOrEqual(result.recovered[0].startedAtMs);
     expect((await readdir(join(root, ID))).sort()).toEqual([`${ID}.call.json`, `${ID}.left.webm`, `${ID}.right.webm`, `${ID}.webm`, MARKER_FILE].sort());
     expect(await readCallMarker(join(root, ID))).toEqual({ app: "ta-call-recorder", id: ID, started_at: "2026-10-29T07:03:05.000Z", ended_at: "2026-10-29T07:20:00.000Z" });
     expect(await readFile(join(root, ID, `${ID}.webm`), "utf8")).toBe("SSS");

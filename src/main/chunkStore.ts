@@ -7,6 +7,7 @@ import { callFileNames, IN_PROGRESS_DIR, partFileName, TRACKS, type Track } from
 import { isValidCallId } from "./callId";
 import { writeMetaAtomic, type CallMeta } from "./callMeta";
 import { writeCallMarker } from "./coreAdapter";
+import type { LinkedSession } from "./deepLinkFlow";
 import type { MicProcessing } from "./ipcTypes";
 
 export interface BeginOptions {
@@ -15,6 +16,8 @@ export interface BeginOptions {
   startedAt: Date;
   micProcessing: MicProcessing;
   appVersion: string;
+  /** The Solace session (Step 5); null for a local-only call. */
+  session?: LinkedSession | null;
 }
 
 export async function pathExists(path: string): Promise<boolean> {
@@ -56,6 +59,7 @@ export class CallWriter {
       mic_processing: o.micProcessing,
       files: { stereo: names.stereo, left: names.left, right: names.right },
       app_version: o.appVersion,
+      session: o.session ? { session_id: o.session.sessionId, dial_mode: o.session.dialMode, send_by: o.session.sendBy } : null,
     };
     await writeMetaAtomic(join(tempDir, names.meta), meta);
     await writeCallMarker(tempDir, { id: o.callId, startedAt: meta.started_at as string, endedAt: null });
@@ -67,6 +71,10 @@ export class CallWriter {
     const run = this.queue.then(job);
     this.queue = run.catch(() => undefined);
     return run;
+  }
+
+  get startedAtMs(): number {
+    return Date.parse(this.meta.started_at as string);
   }
 
   get isFinished(): boolean {

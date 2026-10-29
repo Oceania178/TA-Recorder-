@@ -6,9 +6,10 @@ import { isValidCallId } from "./callId";
 import { writeMetaAtomic, type CallMeta } from "./callMeta";
 import { pathExists, renamePartsToFinal } from "./chunkStore";
 import { writeCallMarker } from "./coreAdapter";
+import type { LinkedSession } from "./deepLinkFlow";
 
 export interface RecoveryResult {
-  recovered: { callId: string; folder: string }[];
+  recovered: { callId: string; folder: string; startedAtMs: number; endedAtMs: number; session: LinkedSession | null }[];
   /** Leftovers with no audio at all (crash right after Start): removed. */
   discardedEmpty: number;
   /** Call ids that could not be moved (e.g. a finished folder with the same id exists); left in place. */
@@ -22,6 +23,18 @@ async function readMeta(file: string): Promise<Partial<CallMeta> | null> {
   } catch {
     return null;
   }
+}
+
+/** The session block of an old <id>.call.json, if it is well formed. */
+function sessionFrom(v: unknown): CallMeta["session"] {
+  if (!v || typeof v !== "object") return null;
+  const s = v as Record<string, unknown>;
+  if (typeof s.session_id !== "string" || typeof s.send_by !== "string" || (s.dial_mode !== "3cx" && s.dial_mode !== "self_dial")) return null;
+  return { session_id: s.session_id, dial_mode: s.dial_mode, send_by: s.send_by };
+}
+
+function toLinked(s: CallMeta["session"]): LinkedSession | null {
+  return s ? { sessionId: s.session_id, dialMode: s.dial_mode, sendBy: s.send_by } : null;
 }
 
 export async function recoverLeftovers(root: string, opts: { skipCallId?: string } = {}): Promise<RecoveryResult> {
@@ -68,6 +81,7 @@ export async function recoverLeftovers(root: string, opts: { skipCallId?: string
         mic_processing: old.mic_processing ?? null,
         files: { stereo: names.stereo, left: names.left, right: names.right },
         app_version: typeof old.app_version === "string" ? old.app_version : null,
+        session: sessionFrom(old.session),
       };
       await writeMetaAtomic(join(dir, names.meta), meta);
       // Retention's clock (D-140) starts at ended_at = the last write before the crash.
@@ -75,7 +89,8 @@ export async function recoverLeftovers(root: string, opts: { skipCallId?: string
       await writeCallMarker(dir, { id: callId, startedAt: meta.started_at ?? new Date(startedFallback).toISOString(), endedAt: meta.ended_at });
       await renamePartsToFinal(dir, callId);
       await rename(dir, finalDir);
-      result.recovered.push({ callId, folder: finalDir });
+      const startedAt = meta.started_at ?? new Date(startedFallback).toISOString();
+      result.recovered.push({ callId, folder: finalDir, startedAtMs: Date.parse(startedAt), endedAtMs: lastWrite, session: toLinked(meta.session) });
     } catch {
       result.failed.push(callId);
     }

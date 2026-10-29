@@ -9,7 +9,8 @@ export interface MicProcessing {
   autoGainControl: boolean;
 }
 
-export type BeginResult = { ok: true; callId: string } | { ok: false; message: string };
+/** linked = a Solace session started this call (Step 5); otherwise it is local only, never sent (D-82). */
+export type BeginResult = { ok: true; callId: string; linked: boolean; dialMode: "3cx" | "self_dial" | null } | { ok: false; message: string };
 export type EndResult = { ok: true; callId: string } | { ok: false; message: string };
 
 export interface StatusReport {
