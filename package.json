@@ -1,0 +1,50 @@
+{
+  "name": "ta-call-recorder",
+  "productName": "TA Call Recorder",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Records a TA's phone-screen call, transcribes it on the laptop, sends only the transcript to Solace.",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "build": "node build/build.mjs",
+    "start": "npm run build && electron .",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dist:win": "npm run build && electron-builder --win nsis"
+  },
+  "build": {
+    "appId": "vn.vng.ta-call-recorder",
+    "productName": "TA Call Recorder",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "package.json"
+    ],
+    "protocols": [
+      {
+        "name": "TA Call Recorder",
+        "schemes": [
+          "tacallrecorder"
+        ]
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.24.2",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9"
+  }
+}
