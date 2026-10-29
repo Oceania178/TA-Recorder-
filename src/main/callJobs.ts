@@ -127,6 +127,12 @@ export class CallJobs {
 
   /** Stop pressed (or a crash recovered): queue the call and start working on it. */
   async add(call: SavedCall): Promise<void> {
+    await this.enqueue(call);
+    await this.drain();
+  }
+
+  /** Queue the call without waiting for the work (main: Stop must answer the window at once). */
+  async enqueue(call: SavedCall): Promise<void> {
     if (!this.queue.get(call.id)) {
       await this.queue.add({
         id: call.id,
@@ -140,7 +146,6 @@ export class CallJobs {
       this.d.log?.("job.added", { id: call.id, linked: call.session !== null });
       this.d.onChange?.();
     }
-    await this.drain();
   }
 
   /** Run everything that is due now, then set the timer for the next wake time. */

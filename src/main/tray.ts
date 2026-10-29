@@ -10,6 +10,8 @@ export interface TrayActions {
   stop(): void;
   open(): void;
   settings(): void;
+  /** The first-run wizard again (D-132). */
+  wizard(): void;
   quit(): void;
 }
 
@@ -48,6 +50,7 @@ export class RecorderTray {
       { type: "separator" },
       { label: "Open recorder", click: () => this.actions.open() },
       { label: "Settings", click: () => this.actions.settings() },
+      { label: "Set-up check…", enabled: state === "idle", click: () => this.actions.wizard() },
       { type: "separator" },
       { label: "Quit", click: () => this.actions.quit() },
     ]);

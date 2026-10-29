@@ -16,6 +16,7 @@
 
       <section class="card recorder" aria-label="Recorder">
         <div class="timer" id="timer" aria-live="off">00:00:00</div>
+        <p class="link-state" id="link-state" hidden></p>
 
         <div class="meters">
           <div class="meter-row">
@@ -37,11 +38,24 @@
         <p class="shortcuts">
           <kbd id="shortcut-record">Ctrl+Alt+R</kbd> start / stop · <kbd id="shortcut-pause">Ctrl+Alt+P</kbd> pause / resume
         </p>
+        <p class="hint center">
+          Start here (or with the shortcut) records a <strong>local-only</strong> call, never sent to Solace. To link a call to a
+          candidate, use "Call &amp; record" in Solace.
+        </p>
+        <p class="hint center">Mute other sounds (chat, music) during a call — the right channel records everything you hear.</p>
 
         <p class="message" id="message" role="status" hidden></p>
         <p class="message warn" id="warning" role="alert" hidden></p>
         <ul class="notices" id="notices" hidden></ul>
         <p class="hint" id="last-saved"></p>
+      </section>
+
+      <section class="card" id="calls" aria-labelledby="calls-title">
+        <h2 id="calls-title">Recent calls</h2>
+        <p class="message warn" id="calls-key-warning" hidden>Add a Gemini key in Settings to transcribe.</p>
+        <p class="hint" id="calls-empty">No calls yet.</p>
+        <ul class="calls" id="calls-list"></ul>
+        <p class="hint">Recordings and transcripts stay on this laptop for 3 days, then they are deleted for good.</p>
       </section>
 
       <section class="card" aria-labelledby="devices-title">
@@ -57,6 +71,41 @@
 
       <section class="card" id="settings" aria-labelledby="settings-title">
         <h2 id="settings-title">Settings</h2>
+
+        <div class="field">
+          <label class="field-label" for="solace-url">Solace address <span class="badge" id="dev-badge" hidden>dev build</span></label>
+          <div class="row">
+            <input id="solace-url" type="url" placeholder="https://solace.example.vn" spellcheck="false" autocomplete="off" />
+            <button id="btn-solace-save" type="button">Save</button>
+            <button id="btn-solace-test" type="button">Test</button>
+          </div>
+          <p class="hint" id="solace-current"></p>
+          <p class="message" id="solace-result" hidden></p>
+          <small class="hint">Transcripts are sent only to this address (never to an address in a link), and only for calls started from Solace.</small>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="gemini-key">Gemini API key</label>
+          <div class="row">
+            <input id="gemini-key" type="password" placeholder="Paste the key" spellcheck="false" autocomplete="off" />
+            <button id="btn-key-save" type="button">Save</button>
+            <button id="btn-key-clear" type="button">Remove</button>
+          </div>
+          <p class="hint" id="key-current"></p>
+          <p class="message" id="key-result" hidden></p>
+          <small class="hint">Kept encrypted for your Windows account only. Never shown again in full, never sent to Solace.</small>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="gemini-model">Gemini model</label>
+          <div class="row">
+            <input id="gemini-model" type="text" spellcheck="false" autocomplete="off" />
+            <button id="btn-model-save" type="button">Save</button>
+          </div>
+          <p class="message" id="model-result" hidden></p>
+          <small class="hint">Leave empty for the default.</small>
+        </div>
+
         <div class="field">
           <span class="field-label">Recordings folder</span>
           <code id="dir-path"></code>
@@ -73,9 +122,118 @@
             <small>Off records your voice as it is. Turn on to compare (P6). Applies to the next recording.</small>
           </span>
         </label>
-        <p class="hint">Audio stays on this laptop. Nothing is sent anywhere.</p>
+        <div class="buttons left">
+          <button id="btn-wizard" type="button">Run the set-up check again</button>
+        </div>
+        <p class="hint">
+          Audio stays on this laptop and is deleted after 3 days. To transcribe, the speech goes to Gemini (Google). Solace gets only the
+          transcript text, and only for calls started from Solace.
+        </p>
       </section>
     </main>
+
+    <div class="wizard-backdrop" id="wizard" hidden>
+      <section class="wizard card" role="dialog" aria-modal="true" aria-labelledby="wizard-title">
+        <header>
+          <h2 id="wizard-title">Set-up check</h2>
+          <button id="wizard-close" type="button">Later</button>
+        </header>
+        <ol class="wizard-steps" id="wizard-steps">
+          <li data-step="1">Notice</li>
+          <li data-step="2">Microphone</li>
+          <li data-step="3">Sound check</li>
+          <li data-step="4">Solace</li>
+          <li data-step="5">3CX</li>
+        </ol>
+
+        <div class="wizard-panel" data-panel="1">
+          <h3>1. What this app does</h3>
+          <ul>
+            <li>It records your calls on this laptop: your microphone (left) and everything you hear (right).</li>
+            <li>To write the transcript, the speech is sent to Gemini (Google).</li>
+            <li>Only the transcript text goes to Solace, and only to the Solace address you set in step 4.</li>
+            <li>The audio never goes to Solace. It stays on this laptop and is deleted for good after 3 days.</li>
+          </ul>
+          <p class="message warn"><strong>Use with role-play calls only until Legal approves real candidates.</strong></p>
+          <p class="wizard-status" id="wz-status-1"></p>
+          <div class="buttons left"><button id="wz-accept" class="primary" type="button">I understand</button></div>
+        </div>
+
+        <div class="wizard-panel" data-panel="2" hidden>
+          <h3>2. Microphone permission</h3>
+          <p>Windows must let desktop apps use the microphone.</p>
+          <p class="wizard-status" id="wz-status-2"></p>
+          <div class="buttons left">
+            <button id="wz-mic-test" class="primary" type="button">Test the microphone</button>
+            <button id="wz-mic-settings" type="button" hidden>Open Windows microphone settings</button>
+          </div>
+          <p class="hint" id="wz-mic-fix" hidden>
+            In Windows Settings → Privacy &amp; security → Microphone, turn on "Microphone access" and "Let desktop apps access your
+            microphone". Then press "Test the microphone" again.
+          </p>
+        </div>
+
+        <div class="wizard-panel" data-panel="3" hidden>
+          <h3>3. Sound check</h3>
+          <p>Put on your headset. Press Start, say a few words, then play the beep: both bars must move.</p>
+          <div class="meters">
+            <div class="meter-row">
+              <span class="meter-label">You (mic) · left</span>
+              <div class="meter"><div class="meter-fill wz-left" id="wz-meter-left"></div></div>
+            </div>
+            <div class="meter-row">
+              <span class="meter-label">What you hear (system audio) · right</span>
+              <div class="meter"><div class="meter-fill wz-right" id="wz-meter-right"></div></div>
+            </div>
+          </div>
+          <p class="wizard-status" id="wz-status-3"></p>
+          <div class="buttons left">
+            <button id="wz-sound-start" class="primary" type="button">Start</button>
+            <button id="wz-beep" type="button" disabled>Play beep</button>
+            <button id="wz-sound-stop" type="button" disabled>Stop</button>
+          </div>
+          <p class="hint" id="wz-sound-fix" hidden>
+            Left bar still: check the headset mic is plugged in and selected in Windows. Right bar still: the beep plays on Windows'
+            default output device — make it your headset (Windows Sound settings).
+          </p>
+        </div>
+
+        <div class="wizard-panel" data-panel="4" hidden>
+          <h3>4. Solace address</h3>
+          <p>Enter the Solace address your team uses. The app sends transcripts only there.</p>
+          <div class="row">
+            <input id="wz-solace-url" type="url" placeholder="https://solace.example.vn" spellcheck="false" autocomplete="off" />
+            <button id="wz-solace-test" class="primary" type="button">Save and test</button>
+          </div>
+          <p class="wizard-status" id="wz-status-4"></p>
+          <p class="hint">
+            The real test: in Solace, press "Call &amp; record" on a role-play candidate. When the browser asks to open TA Call Recorder,
+            tick "Always allow" and open it — the app should start recording.
+          </p>
+        </div>
+
+        <div class="wizard-panel" data-panel="5" hidden>
+          <h3>5. 3CX dials for "Call &amp; record" (can be skipped)</h3>
+          <p>
+            Make 3CX the app that opens phone links: Windows Settings → Apps → Default apps → search "TEL" → choose 3CX. If you call
+            with another app (Zalo PC, Teams…), skip this step and use "Record only, I dial" in Solace.
+          </p>
+          <div class="row">
+            <input id="wz-dial-number" type="tel" placeholder="A harmless number, e.g. your own desk phone" autocomplete="off" />
+            <button id="wz-dial" type="button">Test dial</button>
+          </div>
+          <p class="wizard-status" id="wz-status-5"></p>
+          <div class="buttons left">
+            <button id="wz-dial-ok" type="button" hidden>Yes, 3CX opened with the number</button>
+          </div>
+        </div>
+
+        <footer class="wizard-footer">
+          <button id="wz-back" type="button">Back</button>
+          <button id="wz-next" class="primary" type="button">Next</button>
+        </footer>
+      </section>
+    </div>
     <script src="recorder.js"></script>
   </body>
 </html>

@@ -21,13 +21,59 @@ export interface StatusReport {
   warning: string | null;
 }
 
-export interface SettingsView {
+/** What the recorder controller knows (folder, mic, shortcuts, notices). */
+export interface BaseSettingsView {
   recordingsDir: string;
   dirProblem: string | null;
   micProcessing: boolean;
   shortcuts: { toggleRecord: string; togglePause: string };
   /** One-off messages for the window, e.g. "Recovered 1 recording". */
   notices: string[];
+}
+
+/** The whole Settings panel. Never the Gemini key itself: only its last 4 characters (keyHint). */
+export interface SettingsView extends BaseSettingsView {
+  solaceBaseUrl: string | null;
+  geminiModel: string;
+  geminiModelIsDefault: boolean;
+  /** "•••• wxyz", or null when no key is set. */
+  geminiKeyHint: string | null;
+  /** False when Windows secure storage is not available: a key cannot be saved. */
+  keyStorageOk: boolean;
+  /** A --dev build (http://localhost allowed as the Solace address). */
+  dev: boolean;
+  noticeAccepted: boolean;
+  wizardDone: boolean;
+}
+
+/** Answer to a settings change: a plain-words problem (null = saved) and the panel as it is now. */
+export interface SettingsChange {
+  problem: string | null;
+  view: SettingsView;
+}
+
+export interface AddressTestView {
+  ok: boolean;
+  level: "solace" | "https_only" | "invalid" | "unreachable";
+  message: string;
+}
+
+/** One row of "Recent calls" (see callsView.ts). No folder path, no candidate name. */
+export interface CallRowView {
+  id: string;
+  startedAt: string;
+  durationS: number;
+  linked: boolean;
+  stage: "Recorded" | "Transcribing" | "Transcribed" | "Sending" | "Sent" | "Failed";
+  detail: string | null;
+  canRetry: boolean;
+  hasTranscript: boolean;
+}
+
+/** A message from main for the recorder window (e.g. why a Solace link did not start a recording). */
+export interface AppMessage {
+  kind: "info" | "error" | "ok";
+  text: string;
 }
 
 /** The narrow API the preload exposes as window.recorderApi. */
@@ -43,6 +89,25 @@ export interface RecorderApi {
   chooseRecordingsDir(): Promise<SettingsView>;
   setMicProcessing(on: boolean): Promise<SettingsView>;
   openRecordingsFolder(): Promise<void>;
+  // Settings (Step 2 / Step 5)
+  setSolaceAddress(raw: string): Promise<SettingsChange>;
+  testSolaceAddress(raw: string): Promise<AddressTestView>;
+  setGeminiKey(raw: string): Promise<SettingsChange>;
+  clearGeminiKey(): Promise<SettingsView>;
+  setGeminiModel(raw: string): Promise<SettingsChange>;
+  // Recent calls
+  listCalls(): Promise<CallRowView[]>;
+  retryCall(id: string): Promise<void>;
+  openCallFolder(id: string): Promise<void>;
+  openTranscript(id: string): Promise<boolean>;
+  onCallsChanged(listener: () => void): void;
+  // First-run wizard (D-132)
+  acceptNotice(): Promise<SettingsView>;
+  finishWizard(): Promise<SettingsView>;
+  openMicSettings(): Promise<void>;
+  testDial(phoneNumber: string): Promise<boolean>;
+  onShowWizard(listener: () => void): void;
+  onAppMessage(listener: (message: AppMessage) => void): void;
   /** Floating bar buttons. */
   sendBarCommand(command: Command | "open"): void;
   /** Floating bar display. */
@@ -63,4 +128,22 @@ export const IPC = {
   openFolder: "recordings:open-folder",
   barCommand: "bar:command",
   statusToBar: "bar:status",
+  setSolaceAddress: "settings:solace-address",
+  testSolaceAddress: "settings:test-solace-address",
+  setGeminiKey: "settings:gemini-key",
+  clearGeminiKey: "settings:clear-gemini-key",
+  setGeminiModel: "settings:gemini-model",
+  listCalls: "calls:list",
+  retryCall: "calls:retry",
+  openCallFolder: "calls:open-folder",
+  openTranscript: "calls:open-transcript",
+  callsChanged: "calls:changed",
+  acceptNotice: "wizard:accept-notice",
+  finishWizard: "wizard:finish",
+  openMicSettings: "wizard:open-mic-settings",
+  testDial: "wizard:test-dial",
+  showWizard: "wizard:show",
+  appMessage: "app:message",
+  decoderRequest: "decoder:request",
+  decoderReply: "decoder:reply",
 } as const;

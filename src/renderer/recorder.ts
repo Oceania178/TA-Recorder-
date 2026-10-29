@@ -1,11 +1,14 @@
-// The recorder window: Start / Pause / Resume / Stop, timer, meters, device check, settings.
-// The audio work itself lives in capture.ts; this file only wires it to the screen and to main.
+// The recorder window: Start / Pause / Resume / Stop, timer, meters, device check, settings, recent calls and
+// the set-up check. The audio work itself lives in capture.ts; this file only wires it to the screen and to main.
 import type { RecorderState, SettingsView, Track } from "../main/ipcTypes";
 import { api } from "./bridge";
 import { listDevices, startCapture, type CaptureSession } from "./capture";
 import { ElapsedClock, formatElapsed } from "./elapsedClock";
 import { checkOutputDevices } from "./outputDevices";
+import { initRecentCalls, refreshCalls } from "./recentCalls";
+import { initSettingsPanel, renderSettingsPanel } from "./settingsPanel";
 import { SilenceWatch } from "./silenceWatch";
+import { initWizard, openWizard } from "./wizard";
 
 const TICK_MS = 200;
 const SILENCE_LIMIT_MS = 60_000;
@@ -36,6 +39,13 @@ function showMessage(text: string, kind: "info" | "error" | "ok" = "info"): void
   el.textContent = text;
   el.className = `message ${kind}`;
   el.hidden = !text;
+}
+
+function showLinkState(linked: boolean | null): void {
+  const el = $("link-state");
+  el.hidden = linked === null;
+  el.textContent = linked ? "Linked to Solace" : "Local only — not linked to Solace";
+  el.className = `link-state ${linked ? "linked" : "local"}`;
 }
 
 function setState(next: RecorderState): void {
@@ -105,7 +115,14 @@ async function start(): Promise<void> {
   silence.forEach((s) => s.reset(now));
   warning = null;
   setState("recording");
-  showMessage(`Recording call ${id}.`);
+  showLinkState(begin.linked);
+  showMessage(
+    begin.linked
+      ? begin.dialMode === "self_dial"
+        ? `Recording Solace call ${id}. Dial the candidate yourself.`
+        : `Recording Solace call ${id}.`
+      : `Recording call ${id}. Local only — not linked to Solace: it is transcribed on this laptop and never sent.`,
+  );
   void refreshDevices();
 }
 
@@ -146,9 +163,11 @@ async function stop(): Promise<void> {
   warning = null;
   clock.reset();
   setState("idle");
+  showLinkState(null);
   updateMeters();
+  void refreshCalls();
   if (result.ok) {
-    showMessage(`Saved call ${id} (${formatElapsed(recordedMs)}): stereo, left and right files in the recordings folder.`, "ok");
+    showMessage(`Saved call ${id} (${formatElapsed(recordedMs)}). It is transcribed next — see Recent calls.`, "ok");
     $("last-saved").textContent = `Last saved: ${id}`;
   } else {
     showMessage(result.message, "error");
@@ -206,6 +225,7 @@ function renderSettings(view: SettingsView): void {
   $("shortcut-pause").textContent = view.shortcuts.togglePause;
   $("notices").replaceChildren(...view.notices.map((n) => Object.assign(document.createElement("li"), { textContent: n })));
   $("notices").hidden = view.notices.length === 0;
+  renderSettingsPanel(view);
   setState(state);
 }
 
@@ -227,8 +247,16 @@ async function init(): Promise<void> {
   $("btn-open-dir").addEventListener("click", () => void api().openRecordingsFolder());
   $("mic-processing").addEventListener("change", async (e) => renderSettings(await api().setMicProcessing((e.target as HTMLInputElement).checked)));
   navigator.mediaDevices?.addEventListener?.("devicechange", () => void refreshDevices());
+  initSettingsPanel(renderSettings);
+  initWizard({ isIdle: () => state === "idle", settingsChanged: renderSettings });
+  $("btn-wizard").addEventListener("click", () => settings && openWizard(settings));
+  api().onShowWizard(() => {
+    if (settings) openWizard(settings);
+  });
+  api().onAppMessage((m) => showMessage(m.text, m.kind));
 
   renderSettings(await api().getSettings());
+  initRecentCalls();
   setState("idle");
   setInterval(tick, TICK_MS);
   void refreshDevices();

@@ -245,3 +245,207 @@ details {
 [hidden] {
   display: none !important;
 }
+
+/* ---- Step 2 / Step 5: settings fields, recent calls, the set-up check (APP-C) ---- */
+.row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.row input {
+  flex: 1;
+  min-width: 0;
+}
+
+input[type="url"],
+input[type="text"],
+input[type="password"],
+input[type="tel"] {
+  font: inherit;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.row button {
+  padding: 7px 12px;
+}
+
+.badge {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  border-radius: 4px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+.hint.center {
+  text-align: center;
+}
+
+.link-state {
+  text-align: center;
+  font-weight: 600;
+  margin: -6px 0 10px;
+}
+
+.link-state.linked {
+  color: var(--ok-text);
+}
+
+.link-state.local {
+  color: var(--warn-text);
+}
+
+.calls {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.call {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.call-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.call-when {
+  font-weight: 600;
+}
+
+.call-stage {
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 1px 8px;
+  background: var(--border);
+  white-space: nowrap;
+}
+
+.call-stage.sent {
+  background: var(--ok-bg);
+  color: var(--ok-text);
+}
+
+.call-stage.failed {
+  background: var(--error-bg);
+  color: var(--danger);
+}
+
+.call-meta,
+.call-detail {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 2px 0 0;
+}
+
+.call-detail.failed {
+  color: var(--danger);
+}
+
+.call .buttons {
+  justify-content: flex-start;
+  margin-top: 6px;
+}
+
+.call button {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.wizard-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.wizard {
+  width: 100%;
+  max-width: 520px;
+}
+
+.wizard header {
+  margin-bottom: 8px;
+}
+
+.wizard h3 {
+  font-size: 14px;
+  margin: 8px 0;
+}
+
+.wizard ul {
+  padding-left: 18px;
+}
+
+.wizard-steps {
+  display: flex;
+  gap: 4px;
+  list-style: none;
+  padding: 0;
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+
+.wizard-steps li {
+  flex: 1;
+  text-align: center;
+  padding: 4px 2px;
+  border-radius: 4px;
+  background: #eef1f4;
+  color: var(--muted);
+}
+
+.wizard-steps li.current {
+  outline: 2px solid var(--accent);
+  color: var(--text);
+}
+
+.wizard-steps li.pass {
+  background: var(--ok-bg);
+  color: var(--ok-text);
+}
+
+.wizard-steps li.pass::before {
+  content: "✓ ";
+}
+
+.wizard-status {
+  font-weight: 600;
+  margin: 8px 0;
+}
+
+.wizard-status.pass {
+  color: var(--ok-text);
+}
+
+.wizard-status.notyet {
+  color: var(--warn-text);
+}
+
+.wizard-footer {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 12px;
+}
+
+.wz-left {
+  background: var(--meter-left);
+}
+
+.wz-right {
+  background: var(--meter-right);
+}

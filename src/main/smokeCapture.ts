@@ -5,6 +5,7 @@ import type { BrowserWindow } from "electron";
 import { readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { MARKER_FILE } from "../core/retention";
+import { readPcmFile } from "./pcmFiles";
 import type { RecorderController } from "./controller";
 import { sendCommandToRecorder } from "./windows";
 
@@ -72,7 +73,32 @@ export async function runCrashSelfTest(win: BrowserWindow, controller: RecorderC
   }
 }
 
-export async function runCaptureSelfTest(win: BrowserWindow, controller: RecorderController): Promise<boolean> {
+/** Decodes the left file the way transcription does (decoder page, 16 kHz float32) and prints only numbers. */
+async function decodeForTranscription(decode: (webm: string, pcm: string) => Promise<void>, webm: string): Promise<boolean> {
+  const pcm = `${webm}.smoke.pcm`;
+  try {
+    const started = Date.now();
+    await decode(webm, pcm);
+    const samples = await readPcmFile(pcm);
+    let sum = 0;
+    for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+    const rms = Math.sqrt(sum / Math.max(1, samples.length));
+    const db = rms > 0 ? `${(20 * Math.log10(rms)).toFixed(1)} dBFS` : "silent";
+    console.log(`smoke-capture: transcription decode <id>.left.webm -> ${samples.length} samples at 16 kHz = ${(samples.length / 16000).toFixed(2)} s, rms ${db}, in ${Date.now() - started} ms`);
+    return samples.length > 16000;
+  } catch (e) {
+    console.log(`smoke-capture: transcription decode FAILED (${e instanceof Error ? e.message : "?"})`);
+    return false;
+  } finally {
+    await rm(pcm, { force: true });
+  }
+}
+
+export async function runCaptureSelfTest(
+  win: BrowserWindow,
+  controller: RecorderController,
+  decode?: (webm: string, pcm: string) => Promise<void>,
+): Promise<boolean> {
   sendCommandToRecorder(win, "start");
   if (!(await waitFor(() => controller.guard.state === "recording", 15000))) {
     console.log(`smoke-capture: did not start (${controller.guard.state}). Page says: ${await pageMessage(win)}`);
@@ -103,6 +129,7 @@ export async function runCaptureSelfTest(win: BrowserWindow, controller: Recorde
     const meta = JSON.parse(await readFile(join(folder, `${callId}.call.json`), "utf8"));
     console.log(`smoke-capture: status=${meta.status} recorded_ms=${meta.recorded_ms} pauses=${JSON.stringify(meta.pauses)} started=${meta.started_at} ended=${meta.ended_at}`);
     console.log(`smoke-capture: page says: ${await pageMessage(win)}`);
+    if (decode) ok = (await decodeForTranscription(decode, join(folder, `${callId}.left.webm`))) && ok;
     return ok && meta.status === "complete" && meta.pauses.length === 1;
   } finally {
     await rm(folder, { recursive: true, force: true });

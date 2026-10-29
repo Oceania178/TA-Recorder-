@@ -8,7 +8,7 @@ import { isTrack } from "./callFiles";
 import { isValidCallId, makeCallId } from "./callId";
 import { CallWriter } from "./chunkStore";
 import type { LinkedSession } from "./deepLinkFlow";
-import type { BeginResult, EndResult, MicProcessing, RecorderState, SettingsView } from "./ipcTypes";
+import type { BaseSettingsView, BeginResult, EndResult, MicProcessing, RecorderState } from "./ipcTypes";
 import { checkRecordingsDir, defaultRecordingsDir } from "./recordingsFolder";
 import { recoverLeftovers } from "./recovery";
 import { SessionGuard } from "./sessionGuard";
@@ -118,7 +118,7 @@ export class RecorderController {
     this.notices.push(message);
   }
 
-  settingsView(): SettingsView {
+  settingsView(): BaseSettingsView {
     const notices = this.notices;
     this.notices = [];
     return {
