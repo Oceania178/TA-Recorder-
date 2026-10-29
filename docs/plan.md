@@ -184,7 +184,8 @@ wizard); `npm run selftest:audio` (also decodes the left file the way transcript
   `--updated` or `--delete-app-data`; the purge and the task removal run only when neither `--updated` nor
   `/KEEP_APP_DATA` is there, so an update started with `--delete-app-data` keeps the recordings. (That flag
   still makes electron-builder delete the app-data folder on such an update — its own documented behaviour.)
-  A *silent* real uninstall (`/S`, e.g. by IT) skips electron-builder's app-running check; close the app first.
+  A *silent* real uninstall (`/S`, e.g. by IT) also checks for the running app (in `un.onInit`) and closes it
+  before anything is deleted (APP review 3 corrected the earlier note).
 - **"[không nghe rõ]" is not content (m-R1):** the placeholder turn is still sent, but never makes `has_content`
   true.
 - **16-bit temp PCM (m-R4):** half the disk of float32 (about 0.46 GB per channel for a 4-hour call).
@@ -232,7 +233,7 @@ it; add `--dev` only to test against a Solace on `http://localhost`.
    on + daily) — check it was created **without** an admin prompt; quit the app, log off and on → old calls
    are deleted. Change the recordings folder once, then check calls in the **old** folder are also deleted
    after 3 days. Delete the task by hand in Task Scheduler and restart the app → it is back. **Uninstall** →
-   the recordings in every folder used, the settings, the Gemini key and the task are gone (an **update** keeps
+   the recordings in every folder used, the settings, the Gemini key, the task and the install folder are gone (an **update** keeps
    all of them). **Open the uninstaller and press Cancel on its first page → nothing is deleted** (recordings,
    key, settings and task all still there). Start the uninstaller while the app is recording → it asks to close
    the app before anything is deleted. Settings → Change… to a disconnected network drive letter → "Pick a folder on this laptop." A folder
