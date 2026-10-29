@@ -288,7 +288,7 @@ describe("I2c: uninstalling deletes the recordings", () => {
     expect(nsh).toContain('"--updated"');
     expect(nsh).toContain("--uninstall-purge");
     const html = await readFile(join(__dirname, "..", "..", "src", "renderer", "static", "recorder.html"), "utf8");
-    expect(html).toContain("Uninstalling deletes your recordings");
+    expect(html).toContain("Uninstalling deletes your recordings and the app's settings, including your Gemini key.");
   });
 });
 

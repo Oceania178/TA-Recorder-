@@ -116,11 +116,14 @@ function main(): void {
   void app.whenReady().then(onReady);
 }
 
-/** `--uninstall-purge` (the uninstaller, a real uninstall only): delete every recording of ours, then exit. */
+/**
+ * `--uninstall-purge` (the uninstaller, a real uninstall only): delete every recording of ours and the app's
+ * data (settings, queue, log, Gemini key, tickets), then exit. Nothing is logged: the log is deleted too.
+ */
 function purgeAndExit(): void {
-  void runUninstallPurge({ userDataDir: app.getPath("userData"), documentsDir: app.getPath("documents"), env: process.env, log: (e, f) => log.event(e, f) })
-    .catch(() => log.event("retention.uninstall_purge_failed", {}))
-    .finally(() => void log.flush().finally(() => app.exit(0)));
+  void runUninstallPurge({ userDataDir: app.getPath("userData"), documentsDir: app.getPath("documents"), env: process.env })
+    .catch(() => undefined)
+    .finally(() => app.exit(0));
 }
 
 /**

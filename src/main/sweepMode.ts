@@ -8,11 +8,13 @@
 //   written: the app forgets jobs whose folder is gone at its next start.
 //
 // `TA Call Recorder.exe --uninstall-purge` — what the uninstaller runs on a real uninstall (not an update,
-//   APP review I2c): delete every call folder of ours, whatever its age, in every known recordings folder,
-//   and the upload tickets. Only folders with the app's marker for their own id are touched.
+//   APP review I2c, fix round 2): delete every call folder of ours, whatever its age, in every known
+//   recordings folder (only folders with the app's marker for their own id), then the app's own data in
+//   userData: settings, queue, log, and the secret store (Gemini key and upload tickets). It logs nothing:
+//   a log line would only recreate the file it just deleted.
 //
 // Both delete each removed call's upload-ticket file (the encrypted content is never read) and log counts only.
-import { rm } from "node:fs/promises";
+import { readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { loadSettings, type AppSettings } from "./appSettings";
 import { sweepRoots } from "./inProgressSweep";
@@ -67,11 +69,23 @@ export async function runHeadlessSweep(o: HeadlessContext & { nowMs: number }): 
   return { ran: true, deleted: r.deleted, kept: r.kept, busy: r.busy, errors: r.errors };
 }
 
+/** The app's own files in userData (Chromium's folders there are left to the uninstaller's app-data delete). */
+const APP_DATA = [/^settings\.json(\.tmp)?$/, /^queue\.json(\..*)?$/, /^app\.log(\.1)?$/, /^secrets$/, /^ta-call-recorder-cleanup-.*\.xml$/];
+
 export async function runUninstallPurge(o: HeadlessContext): Promise<{ deleted: number; errors: number }> {
   const settings = await loadSettings(join(o.userDataDir, "settings.json"));
   const roots = recordingsRoots(settings, o.documentsDir, o.env);
+  // 1. The recordings, everywhere they were kept. 2. The app's data: settings, queue, log, key and tickets.
   const r = await sweepRoots({ roots, nowMs: Date.now(), isBusy: () => false, retentionMs: -Number.MAX_SAFE_INTEGER });
-  await rm(join(o.userDataDir, "secrets", "tickets"), { recursive: true, force: true }).catch(() => undefined);
-  o.log?.("retention.uninstall_purge", { folders: roots.length, deleted: r.deleted, errors: r.errors });
-  return { deleted: r.deleted, errors: r.errors };
+  let errors = r.errors;
+  let names: string[] = [];
+  try {
+    names = await readdir(o.userDataDir);
+  } catch {
+    // no app data
+  }
+  for (const name of names.filter((n) => APP_DATA.some((p) => p.test(n)))) {
+    await rm(join(o.userDataDir, name), { recursive: true, force: true, maxRetries: 3 }).catch(() => void errors++);
+  }
+  return { deleted: r.deleted, errors };
 }

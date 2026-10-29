@@ -21,11 +21,12 @@ function realDriveRoot(root: string): string | null {
   try {
     return realpathSync.native(root);
   } catch {
-    return null; // not there (yet): judged when the folder is used
+    return null; // not there: a disconnected network drive, or an unplugged one
   }
 }
 
-const NETWORK = "This folder is on a network drive. Recordings must stay on this laptop: choose a folder on a local disk.";
+const NETWORK = "This folder is on a network drive. Pick a folder on this laptop.";
+const NOT_CONNECTED = "This drive is not connected (a network or removable drive?). Pick a folder on this laptop.";
 
 export function checkRecordingsDir(
   path: string,
@@ -35,7 +36,8 @@ export function checkRecordingsDir(
   if (path.startsWith("\\\\") || path.startsWith("//")) return { ok: false, message: NETWORK };
   if (!/^[a-z]:[\\/]/i.test(path)) return { ok: false, message: "The recordings folder must be a full path, e.g. C:\\Users\\you\\Documents\\..." };
   const root = (o.driveRoot ?? realDriveRoot)(`${path.slice(0, 2).toUpperCase()}\\`);
-  if (root && (root.startsWith("\\\\") || root.startsWith("//"))) return { ok: false, message: NETWORK };
+  if (root === null) return { ok: false, message: NOT_CONNECTED };
+  if (root.startsWith("\\\\") || root.startsWith("//")) return { ok: false, message: NETWORK };
   if (isUnderOneDrive(path, env)) {
     return {
       ok: false,

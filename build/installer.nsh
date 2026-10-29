@@ -3,8 +3,11 @@
 ; on a real uninstall, so an update keeps the recordings and the cleanup task.
 
 ; Before the files are removed (the app is still there): delete this user's recordings in every recordings
-; folder the app has used (D-140, APP review I2c). The set-up notice tells the TA: "Uninstalling deletes your
-; recordings." Only folders carrying the app's own marker are deleted.
+; folder the app has used (D-140, APP review I2c), then the app's data: settings, queue, log, Gemini key and
+; tickets (fix round 2). The set-up notice tells the TA: "Uninstalling deletes your recordings and the app's
+; settings, including your Gemini key." Only call folders carrying the app's own marker are deleted.
+; electron-builder then removes the whole app-data folder too (nsis.deleteAppDataOnUninstall), also only on a
+; real uninstall.
 !macro customUnInit
   ClearErrors
   ${GetParameters} $R0
