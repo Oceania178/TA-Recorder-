@@ -131,7 +131,7 @@ Windows must let desktop apps use the mic (*Settings → Privacy → Microphone*
 | `deepLinkFlow.ts` | `tacallrecorder://start…` → strict parse (a bad link: "This link can't start a recording", never logged) → refuse while recording (D-39) or with no Solace address (points to Settings) → **reuse the upload ticket already held for that session** (the browser opened the link twice) or check the ticket at the pinned address (step ①b) → only an "ok" records; every other answer is explained and nothing is recorded. |
 | `controller.ts` | A checked session is "armed"; the next Start records it under the **session id** (D-84) with the session in `<id>.call.json` (no ticket). Start from the button, tray or shortcut records a **local-only** call (D-82): transcribed, written to `.md` / `.json`, never sent; the window says "Local only — not linked to Solace". Every saved or crash-recovered call goes to the queue. |
 | `callJobs.ts` | `JobQueue` (`<app data>\queue.json`) + `QueueRunner` with core's `transcribeJob` / `sendJob`. Drains after each Stop (without delaying Stop), at start-up and at `nextWakeAt()` (a timer). **No Gemini key:** the call waits in "Recorded" with "Add a Gemini key in Settings to transcribe" and starts as soon as a key is saved. Sweep (D-140) at start-up and hourly, then forgets those jobs and tickets; jobs whose folder disappeared (the logon task) are dropped at start-up. |
-| `webm.ts`, `decoderClient.ts`, `decoderWindow.ts`, `renderer/decoder.ts`, `renderer/downsample.ts`, `pcmFiles.ts` | Decoding for transcription (controller decision): main reads the Opus packets out of `<id>.left.webm` / `.right.webm`; a hidden sandboxed page decodes them **10 s at a time** with WebCodecs and brings them to **16 kHz mono**; main appends them to `<id>.left.pcm` / `.right.pcm` (raw float32, written as `.part` then renamed) in the call folder, which core's `loadPcm` reads; the temp files are deleted once the transcript is written. A whole call is never held at 48 kHz. Checked on this laptop by `npm run selftest:audio` (4.98 s → 79,680 samples, same loudness as the file). Memory note: core still takes each channel whole at 16 kHz (≈ 230 MB per channel for 60 min). |
+| `webm.ts`, `decoderClient.ts`, `decoderWindow.ts`, `renderer/decoder.ts`, `renderer/downsample.ts`, `pcmFiles.ts` | Decoding for transcription (controller decision): main reads the Opus packets out of `<id>.left.webm` / `.right.webm`; a hidden sandboxed page decodes them **10 s at a time** with WebCodecs and brings them to **16 kHz mono**; main appends them to `<id>.left.pcm` / `.right.pcm` (raw float32, written as `.part` then renamed) in the call folder, which core reads through `openPcm` as readers (fix round 1); the temp files are deleted once the transcript is written. A whole call is never held at 48 kHz. Checked on this laptop by `npm run selftest:audio` (4.98 s → 79,680 samples, same loudness as the file). Since fix round 1 no channel is ever read whole (see Fix round 1, I3). |
 | `sweepMode.ts`, `cleanupTask.ts`, `build/installer.nsh` | `TA Call Recorder.exe --sweep`: deletes expired calls headless and exits (reads the queue read-only; if the app is open, the open app sweeps instead). The installed app creates the Task Scheduler task **"TA Call Recorder cleanup"** for the current user on first run (and after an update): at this user's logon and daily, lowest rights, no admin. It is made from an XML definition because a plain `schtasks /SC ONLOGON` task triggers for any user and needs admin. The uninstaller deletes it (`customUnInstall`). Development builds create it only with `--register-cleanup-task`. Tests never run `schtasks`. |
 | `appLog.ts` | `<app data>\app.log` (256 KB, one old file kept): events with counts, stages, reason codes and call ids only. Tickets, keys, links, paths and any text become `[redacted]`. |
 | `callsView.ts`, `renderer/recentCalls.ts` | **Recent calls**: date and time, length, linked or local only, stage (Recorded / Transcribing / Transcribed / Sending / Sent / Failed + the reason in plain words), Retry on failed calls, Open folder, Open transcript (the `.md`). No candidate names. |
@@ -140,8 +140,40 @@ Windows must let desktop apps use the mic (*Settings → Privacy → Microphone*
 Checks a developer runs: `npm test`; `npm run smoke` (also asks the page for settings, Recent calls and the
 wizard); `npm run selftest:audio` (also decodes the left file the way transcription does).
 
+### Fix round 1 (independent APP review, 29/10/2026)
+- **Notice first (I1, D-126):** nothing records — button, tray, shortcut or Solace link — until "I understand" is
+  pressed in the set-up check. A refused start says "Open Set-up check and accept the notice first." and opens
+  it; a Solace link is refused before any ticket check. Closing the set-up check does not accept.
+- **3 days everywhere (I2, D-140):** every recordings folder ever used is remembered (`knownRecordingsDirs` in
+  `settings.json`) and swept at start-up, hourly and by `--sweep`; crash leftovers stuck in `.in-progress` are
+  deleted 3 days after their newest file (never the call being recorded). `--sweep` holds the single-instance
+  lock, so a stale "transcribing" stage cannot block it. A **real uninstall** (not an update) runs
+  `--uninstall-purge` first: every call folder with the app's marker, in every known folder, whatever its age,
+  plus the upload tickets. The notice says "Uninstalling deletes your recordings."
+- **Long calls (I3):** the VAD reads each channel's temp PCM file 10 s at a time and each segment reads only its
+  own samples (`openPcm`, `detectSpeechStream`), so memory stays small for any length (tested with a synthetic
+  4-hour call: no read over ~31 s of audio). Recordings stop and are saved at **4 h**, with a warning at 3 h 50.
+- **Minors:** Retry after "transcript missing" transcribes again (M1); the transcript goes to the Solace origin
+  the ticket was checked at, kept with the ticket (M2); a held ticket is reused only for the same link ticket
+  (sha256, M3); an armed Solace session only attaches to the start its link pressed (`startLinked`, M4);
+  Solace's caps (5,000 turns, 300,000 characters) are checked before sending — `transcript_over_limits` (M5);
+  a Gemini 400 on one segment writes "[không nghe rõ]" there and goes on, the call fails only when most
+  segments fail (M6); UNC paths and mapped network drives are refused as recordings folder (M7); the cleanup
+  task is re-created at start-up when missing (`schtasks /Query`) and kept during an update (M8); an unplugged
+  recordings folder keeps its jobs and tickets (M9); pages load only the app's own files (M10); the mic
+  permission never includes a camera — getDisplayMedia arrives as "media" with no types (checked on this
+  laptop) — the floating bar has its own two-function preload, and an `afterPack` hook
+  (`build/fuses.cjs`) sets Electron's fuses: RunAsNode, NODE_OPTIONS and inspect off, cookie encryption and
+  only-load-from-asar on (ASAR integrity left off: electron-builder 25 does not embed the Windows integrity
+  resource, and `electronFuses` does not exist in electron-builder 25) (M11); Gemini and Solace calls use
+  Chromium's network stack (`net.fetch` in its own session: Windows proxy and certificate store) (M12).
+- **Clock:** when Solace's `server_time` differs from the laptop by more than 2 minutes the window warns "Your
+  laptop clock is off by N min — fix Windows time, Solace may reject the call".
+- **Contract lock:** a test runs an app-built payload through Solace's own `validateTranscriptUpload`
+  (read-only import from the Solace worktree; skipped where that worktree is absent).
+
 Follow-ups: shortcuts are fixed (make them configurable later); the silence-warning thresholds are to be tuned
-after real calls; Solace's `server_time` is not used to correct the laptop clock.
+after real calls.
 
 ## How Triet tests Step 2 / Step 5
 Role-play calls only (D-126). Start with `npm start` (or the installed app, after the controller builds it).
@@ -169,11 +201,19 @@ it; add `--dev` only to test against a Solace on `http://localhost`.
    says to set it in Settings.
 7. **Offline (T22):** Wi-Fi off after a linked call → "Waiting to try again"; Wi-Fi on → it is sent (the timer
    retries; a resend never makes a duplicate, D-85).
-8. **T20 / D-140:** the network log shows only the transcript JSON going to Solace. After 3 days (or with the
+8. **Fix round 1 checks:** on a fresh profile, close the set-up check without "I understand" and press
+   Ctrl+Alt+R, the Start button and a Solace link → each is refused with "Open Set-up check and accept the
+   notice first." and the set-up check opens. Settings → Change… to a mapped network drive (e.g. `Z:\`) →
+   refused. On the company network (proxy / TLS inspection) step 4's test and a linked call must work (M12).
+   Move the laptop clock 5 minutes off and start a linked call → the clock warning shows.
+9. **T20 / D-140:** the network log shows only the transcript JSON going to Solace. After 3 days (or with the
    laptop clock moved forward) the call's folder is gone, not in the Recycle Bin, and the call leaves Recent
    calls. With the **installed** app: Task Scheduler shows "TA Call Recorder cleanup" under your user (at log
    on + daily) — check it was created **without** an admin prompt; quit the app, log off and on → old calls
-   are deleted. Uninstall → the task is gone. A folder inside OneDrive is refused.
+   are deleted. Change the recordings folder once, then check calls in the **old** folder are also deleted
+   after 3 days. Delete the task by hand in Task Scheduler and restart the app → it is back. **Uninstall** →
+   the recordings in every folder used are gone and the task is gone (an **update** keeps both). A folder
+   inside OneDrive is refused. Check the installed exe starts normally (the fuses are set at packaging).
 
 ## Tests the owner runs by hand (they need a real call / real audio)
 T1, T2, T3, T4, T5, T10, T14 (Step 0); R1–R7; T6, T7, T8, T9, T20, T22, T37 (with role-play calls and the
