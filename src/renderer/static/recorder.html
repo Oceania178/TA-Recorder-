@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob: mediastream:" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TA Call Recorder</title>
+    <link rel="stylesheet" href="recorder.css" />
+  </head>
+  <body data-state="idle">
+    <main>
+      <header>
+        <h1>TA Call Recorder</h1>
+        <span class="status-pill" id="status">Ready</span>
+      </header>
+
+      <section class="card recorder" aria-label="Recorder">
+        <div class="timer" id="timer" aria-live="off">00:00:00</div>
+
+        <div class="meters">
+          <div class="meter-row">
+            <span class="meter-label">You (mic) · left</span>
+            <div class="meter"><div class="meter-fill" id="meter-left"></div></div>
+          </div>
+          <div class="meter-row">
+            <span class="meter-label">Other side (system audio) · right</span>
+            <div class="meter"><div class="meter-fill" id="meter-right"></div></div>
+          </div>
+        </div>
+
+        <div class="buttons">
+          <button id="btn-start" class="primary" type="button">Start</button>
+          <button id="btn-pause" type="button" disabled>Pause</button>
+          <button id="btn-stop" class="danger" type="button" disabled>Stop</button>
+        </div>
+
+        <p class="shortcuts">
+          <kbd id="shortcut-record">Ctrl+Alt+R</kbd> start / stop · <kbd id="shortcut-pause">Ctrl+Alt+P</kbd> pause / resume
+        </p>
+
+        <p class="message" id="message" role="status" hidden></p>
+        <p class="message warn" id="warning" role="alert" hidden></p>
+        <ul class="notices" id="notices" hidden></ul>
+        <p class="hint" id="last-saved"></p>
+      </section>
+
+      <section class="card" aria-labelledby="devices-title">
+        <h2 id="devices-title">Device check</h2>
+        <p>System audio is recorded from: <strong id="device-recorded">unknown</strong></p>
+        <p class="message warn" id="device-warning" hidden></p>
+        <details>
+          <summary>All output devices</summary>
+          <ul id="device-list"></ul>
+        </details>
+        <button id="btn-check-devices" type="button">Check again</button>
+      </section>
+
+      <section class="card" id="settings" aria-labelledby="settings-title">
+        <h2 id="settings-title">Settings</h2>
+        <div class="field">
+          <span class="field-label">Recordings folder</span>
+          <code id="dir-path"></code>
+          <p class="message error" id="dir-problem" hidden></p>
+          <div class="buttons left">
+            <button id="btn-change-dir" type="button">Change…</button>
+            <button id="btn-open-dir" type="button">Open folder</button>
+          </div>
+        </div>
+        <label class="field checkbox">
+          <input type="checkbox" id="mic-processing" />
+          <span>
+            Mic processing (echo cancellation, noise suppression, auto gain)
+            <small>Off records your voice as it is. Turn on to compare (P6). Applies to the next recording.</small>
+          </span>
+        </label>
+        <p class="hint">Audio stays on this laptop. Nothing is sent anywhere.</p>
+      </section>
+    </main>
+    <script src="recorder.js"></script>
+  </body>
+</html>

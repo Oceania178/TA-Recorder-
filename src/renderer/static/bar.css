@@ -1,0 +1,113 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 13px;
+  background: #1f2933;
+  color: #fff;
+  user-select: none;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  padding: 0 8px 0 12px;
+  -webkit-app-region: drag;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #9aa5b1;
+  flex: none;
+}
+
+body[data-state="recording"] .dot {
+  background: #ef4444;
+}
+
+body[data-state="paused"] .dot {
+  background: #f59e0b;
+}
+
+.timer {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  min-width: 62px;
+}
+
+.meters {
+  display: grid;
+  gap: 3px;
+  width: 64px;
+  flex: none;
+}
+
+.meter {
+  height: 5px;
+  background: #3e4c59;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.fill {
+  height: 100%;
+  width: 0;
+}
+
+.fill.left {
+  background: #60a5fa;
+}
+
+.fill.right {
+  background: #34d399;
+}
+
+.warn {
+  background: #f59e0b;
+  color: #1f2933;
+  border-radius: 50%;
+  width: 16px;
+  height: 16px;
+  text-align: center;
+  font-weight: 700;
+  line-height: 16px;
+  flex: none;
+}
+
+button {
+  -webkit-app-region: no-drag;
+  font: inherit;
+  border: 0;
+  border-radius: 4px;
+  padding: 5px 10px;
+  background: #3e4c59;
+  color: #fff;
+  cursor: pointer;
+}
+
+button.stop {
+  background: #dc2626;
+}
+
+button.open {
+  padding: 5px 8px;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+[hidden] {
+  display: none !important;
+}
