@@ -5,6 +5,7 @@ import { callFileNames, IN_PROGRESS_DIR, partFileName, TRACKS } from "./callFile
 import { isValidCallId } from "./callId";
 import { writeMetaAtomic, type CallMeta } from "./callMeta";
 import { pathExists, renamePartsToFinal } from "./chunkStore";
+import { writeCallMarker } from "./coreAdapter";
 
 export interface RecoveryResult {
   recovered: { callId: string; folder: string }[];
@@ -69,6 +70,9 @@ export async function recoverLeftovers(root: string, opts: { skipCallId?: string
         app_version: typeof old.app_version === "string" ? old.app_version : null,
       };
       await writeMetaAtomic(join(dir, names.meta), meta);
+      // Retention's clock (D-140) starts at ended_at = the last write before the crash.
+      const startedFallback = (await stat(dir)).birthtimeMs || lastWrite;
+      await writeCallMarker(dir, { id: callId, startedAt: meta.started_at ?? new Date(startedFallback).toISOString(), endedAt: meta.ended_at });
       await renamePartsToFinal(dir, callId);
       await rename(dir, finalDir);
       result.recovered.push({ callId, folder: finalDir });

@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { recoverLeftovers } from "../../src/main/recovery";
+import { readCallMarker, MARKER_FILE } from "../../src/core/retention";
 
 const ID = "20261029-140305-a1b2c3";
 let root: string;
@@ -39,7 +40,8 @@ describe("recoverLeftovers", () => {
     const result = await recoverLeftovers(root);
 
     expect(result.recovered).toEqual([{ callId: ID, folder: join(root, ID) }]);
-    expect((await readdir(join(root, ID))).sort()).toEqual([`${ID}.call.json`, `${ID}.left.webm`, `${ID}.right.webm`, `${ID}.webm`]);
+    expect((await readdir(join(root, ID))).sort()).toEqual([`${ID}.call.json`, `${ID}.left.webm`, `${ID}.right.webm`, `${ID}.webm`, MARKER_FILE].sort());
+    expect(await readCallMarker(join(root, ID))).toEqual({ app: "ta-call-recorder", id: ID, started_at: "2026-10-29T07:03:05.000Z", ended_at: "2026-10-29T07:20:00.000Z" });
     expect(await readFile(join(root, ID, `${ID}.webm`), "utf8")).toBe("SSS");
     const meta = JSON.parse(await readFile(join(root, ID, `${ID}.call.json`), "utf8"));
     expect(meta).toMatchObject({ status: "recovered", recovered: true, started_at: "2026-10-29T07:03:05.000Z", ended_at: "2026-10-29T07:20:00.000Z" });
@@ -53,6 +55,9 @@ describe("recoverLeftovers", () => {
     expect(result.recovered.map((r) => r.callId)).toEqual([ID]);
     const meta = JSON.parse(await readFile(join(root, ID, `${ID}.call.json`), "utf8"));
     expect(meta).toMatchObject({ call_id: ID, status: "recovered", recovered: true, started_at: null });
+    const marker = await readCallMarker(join(root, ID));
+    expect(marker?.ended_at).toEqual(expect.any(String));
+    expect(marker?.started_at).toEqual(expect.any(String));
   });
 
   it("drops a leftover that holds no audio at all", async () => {

@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CallWriter } from "../../src/main/chunkStore";
+import { readCallMarker, MARKER_FILE } from "../../src/core/retention";
 
 const ID = "20261029-140305-a1b2c3";
 const MIC = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
@@ -26,7 +27,8 @@ describe("CallWriter", () => {
   it("starts a call in the in-progress folder with empty part files and metadata", async () => {
     await begin();
     const dir = join(root, ".in-progress", ID);
-    expect((await readdir(dir)).sort()).toEqual([`${ID}.call.json`, `${ID}.left.webm.part`, `${ID}.right.webm.part`, `${ID}.webm.part`]);
+    expect((await readdir(dir)).sort()).toEqual([`${ID}.call.json`, `${ID}.left.webm.part`, `${ID}.right.webm.part`, `${ID}.webm.part`, MARKER_FILE].sort());
+    expect(await readCallMarker(dir)).toEqual({ app: "ta-call-recorder", id: ID, started_at: "2026-10-29T07:03:05.000Z", ended_at: null });
     const meta = JSON.parse(await readFile(join(dir, `${ID}.call.json`), "utf8"));
     expect(meta).toMatchObject({ call_id: ID, status: "recording", started_at: "2026-10-29T07:03:05.000Z", recovered: false, pause_handling: "cut", pauses: [], mic_processing: MIC });
   });
@@ -57,8 +59,9 @@ describe("CallWriter", () => {
     const result = await w.finalise({ endedAt: new Date("2026-10-29T07:13:05.000Z"), recordedMs: 540000 });
     const dir = join(root, ID);
     expect(result.folder).toBe(dir);
-    expect((await readdir(dir)).sort()).toEqual([`${ID}.call.json`, `${ID}.left.webm`, `${ID}.right.webm`, `${ID}.webm`]);
+    expect((await readdir(dir)).sort()).toEqual([`${ID}.call.json`, `${ID}.left.webm`, `${ID}.right.webm`, `${ID}.webm`, MARKER_FILE].sort());
     expect(await readFile(join(dir, `${ID}.right.webm`), "utf8")).toBe("R");
+    expect((await readCallMarker(dir))?.ended_at).toBe("2026-10-29T07:13:05.000Z");
     expect(existsSync(join(root, ".in-progress", ID))).toBe(false);
     const meta = JSON.parse(await readFile(join(dir, `${ID}.call.json`), "utf8"));
     expect(meta).toMatchObject({ status: "complete", ended_at: "2026-10-29T07:13:05.000Z", recorded_ms: 540000, recovered: false });

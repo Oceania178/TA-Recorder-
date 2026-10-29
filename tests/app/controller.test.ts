@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RecorderController } from "../../src/main/controller";
 import type { RecorderState } from "../../src/main/ipcTypes";
+import { MARKER_FILE, sweepRecordings } from "../../src/core/retention";
 
 const MIC = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
 let base: string;
@@ -45,8 +46,23 @@ describe("RecorderController", () => {
     const end = await c.endCall(begin.callId, 5000);
     expect(end).toEqual({ ok: true, callId: begin.callId });
     const files = (await readdir(join(recordings(), begin.callId))).sort();
-    expect(files).toEqual([`${begin.callId}.call.json`, `${begin.callId}.left.webm`, `${begin.callId}.right.webm`, `${begin.callId}.webm`]);
+    expect(files).toEqual([`${begin.callId}.call.json`, `${begin.callId}.left.webm`, `${begin.callId}.right.webm`, `${begin.callId}.webm`, MARKER_FILE].sort());
     expect(states).toEqual(["starting", "recording", "paused", "recording", "stopping", "idle"]);
+  });
+
+  it("leaves call folders that core's 3-day sweep recognises and deletes (D-140)", async () => {
+    const c = make();
+    await c.init();
+    const b = await c.beginCall(MIC);
+    if (!b.ok) throw new Error("start failed");
+    c.noteCaptureStarted();
+    await c.endCall(b.callId, 1000);
+    const second = await c.beginCall(MIC);
+    if (!second.ok) throw new Error("second start failed");
+    const report = await sweepRecordings({ root: recordings(), nowMs: Date.now() + 4 * 24 * 3600_000, isBusy: () => false });
+    expect(report.deleted).toBe(1);
+    expect(existsSync(join(recordings(), b.callId))).toBe(false);
+    expect(existsSync(join(recordings(), ".in-progress", second.callId))).toBe(true);
   });
 
   it("refuses a second start while recording (D-39)", async () => {

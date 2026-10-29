@@ -4,6 +4,7 @@
 import type { BrowserWindow } from "electron";
 import { readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { MARKER_FILE } from "../core/retention";
 import type { RecorderController } from "./controller";
 import { sendCommandToRecorder } from "./windows";
 
@@ -91,7 +92,8 @@ export async function runCaptureSelfTest(win: BrowserWindow, controller: Recorde
   const folder = join(controller.recordingsDir(), callId);
   try {
     const files = (await readdir(folder)).sort();
-    let ok = files.length === 4;
+    const needed = [".webm", ".left.webm", ".right.webm", ".call.json"].map((s) => callId + s).concat(MARKER_FILE);
+    let ok = needed.every((n) => files.includes(n));
     for (const f of files) {
       const size = (await stat(join(folder, f))).size;
       if (f.endsWith(".webm") && size === 0) ok = false;

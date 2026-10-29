@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { callFileNames, IN_PROGRESS_DIR, partFileName, TRACKS, type Track } from "./callFiles";
 import { isValidCallId } from "./callId";
 import { writeMetaAtomic, type CallMeta } from "./callMeta";
+import { writeCallMarker } from "./coreAdapter";
 import type { MicProcessing } from "./ipcTypes";
 
 export interface BeginOptions {
@@ -57,6 +58,7 @@ export class CallWriter {
       app_version: o.appVersion,
     };
     await writeMetaAtomic(join(tempDir, names.meta), meta);
+    await writeCallMarker(tempDir, { id: o.callId, startedAt: meta.started_at as string, endedAt: null });
     return new CallWriter(o.root, o.callId, tempDir, meta);
   }
 
@@ -108,6 +110,7 @@ export class CallWriter {
       const open = this.meta.pauses[this.meta.pauses.length - 1];
       if (open && open.resumed_at === null) open.resumed_at = this.meta.ended_at;
       await this.writeMeta();
+      await writeCallMarker(this.tempDir, { id: this.callId, startedAt: this.meta.started_at as string, endedAt: this.meta.ended_at });
       await renamePartsToFinal(this.tempDir, this.callId);
       await rename(this.tempDir, finalDir);
       this.finished = true;
