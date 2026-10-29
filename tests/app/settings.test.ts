@@ -50,8 +50,8 @@ describe("app settings file", () => {
 
   it("saves and loads", async () => {
     const file = join(dir, "settings.json");
-    await saveSettings(file, { recordingsDir: "D:\\Calls", micProcessing: true });
-    expect(await loadSettings(file)).toEqual({ recordingsDir: "D:\\Calls", micProcessing: true });
+    await saveSettings(file, { ...DEFAULT_SETTINGS, recordingsDir: "D:\\Calls", micProcessing: true });
+    expect(await loadSettings(file)).toEqual({ ...DEFAULT_SETTINGS, recordingsDir: "D:\\Calls", micProcessing: true });
   });
 
   it("falls back to defaults on a damaged file or wrong types", async () => {
