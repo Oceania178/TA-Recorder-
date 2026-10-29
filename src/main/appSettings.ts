@@ -19,6 +19,8 @@ export interface AppSettings {
   wizardDoneAt: string | null;
   /** The program path + version the logon cleanup task was created for (D-140); re-created when it changes. */
   cleanupTaskFor: string | null;
+  /** Every recordings folder used so far: all are swept at 3 days, and purged on uninstall (APP review I2). */
+  knownRecordingsDirs: string[];
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -29,6 +31,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   noticeAcceptedAt: null,
   wizardDoneAt: null,
   cleanupTaskFor: null,
+  knownRecordingsDirs: [],
 };
 
 const FIELDS = Object.keys(DEFAULT_SETTINGS) as (keyof AppSettings)[];
@@ -52,12 +55,16 @@ export async function loadSettings(file: string): Promise<AppSettings> {
   if (stringOrNull(raw.noticeAcceptedAt)) s.noticeAcceptedAt = raw.noticeAcceptedAt;
   if (stringOrNull(raw.wizardDoneAt)) s.wizardDoneAt = raw.wizardDoneAt;
   if (stringOrNull(raw.cleanupTaskFor)) s.cleanupTaskFor = raw.cleanupTaskFor;
+  if (Array.isArray(raw.knownRecordingsDirs)) {
+    s.knownRecordingsDirs = raw.knownRecordingsDirs.filter((d): d is string => typeof d === "string" && d.trim() !== "").slice(-20);
+  }
   return s;
 }
 
 export async function saveSettings(file: string, settings: AppSettings): Promise<void> {
   const known: Record<string, unknown> = {};
   for (const f of FIELDS) known[f] = settings[f] ?? DEFAULT_SETTINGS[f];
+  if (!Array.isArray(known.knownRecordingsDirs)) known.knownRecordingsDirs = [];
   await mkdir(dirname(file), { recursive: true });
   const tmp = `${file}.tmp`;
   await writeFile(tmp, JSON.stringify(known, null, 2), "utf8");

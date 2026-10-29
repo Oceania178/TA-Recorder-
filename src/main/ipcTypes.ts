@@ -1,7 +1,8 @@
 // Types shared by main, preload and renderer. No Electron or Node imports here.
 export type Track = "stereo" | "left" | "right";
 export type RecorderState = "idle" | "starting" | "recording" | "paused" | "stopping";
-export type Command = "start" | "stop" | "pause" | "resume";
+/** startLinked: the start a Solace link presses (records the armed session only). */
+export type Command = "start" | "startLinked" | "stop" | "pause" | "resume";
 
 export interface MicProcessing {
   echoCancellation: boolean;
@@ -10,7 +11,10 @@ export interface MicProcessing {
 }
 
 /** linked = a Solace session started this call (Step 5); otherwise it is local only, never sent (D-82). */
-export type BeginResult = { ok: true; callId: string; linked: boolean; dialMode: "3cx" | "self_dial" | null } | { ok: false; message: string };
+export type BeginResult =
+  | { ok: true; callId: string; linked: boolean; dialMode: "3cx" | "self_dial" | null }
+  /** code "notice": the D-126 notice is not accepted yet — the window opens the set-up check. */
+  | { ok: false; message: string; code?: "notice" };
 export type EndResult = { ok: true; callId: string } | { ok: false; message: string };
 
 export interface StatusReport {
@@ -72,13 +76,13 @@ export interface CallRowView {
 
 /** A message from main for the recorder window (e.g. why a Solace link did not start a recording). */
 export interface AppMessage {
-  kind: "info" | "error" | "ok";
+  kind: "info" | "error" | "ok" | "warn";
   text: string;
 }
 
 /** The narrow API the preload exposes as window.recorderApi. */
 export interface RecorderApi {
-  beginCall(micProcessing: MicProcessing): Promise<BeginResult>;
+  beginCall(micProcessing: MicProcessing, intent: "local" | "linked"): Promise<BeginResult>;
   appendChunk(callId: string, track: Track, data: ArrayBuffer): Promise<void>;
   markPause(callId: string, kind: "pause" | "resume", recordedMs: number): Promise<void>;
   endCall(callId: string, recordedMs: number): Promise<EndResult>;

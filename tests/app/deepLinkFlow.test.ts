@@ -1,6 +1,6 @@
 // Step 5 (app part): a tacallrecorder:// link → ticket check at the pinned address → recording linked to Solace.
 import { describe, expect, it } from "vitest";
-import { DeepLinkFlow, type DeepLinkFlowDeps, type LinkedSession } from "../../src/main/deepLinkFlow";
+import { DeepLinkFlow, hashLinkTicket, type DeepLinkFlowDeps, type LinkedSession } from "../../src/main/deepLinkFlow";
 import { Secret, type CheckResult } from "../../src/core";
 import type { HeldTicket } from "../../src/main/secretStore";
 
@@ -23,6 +23,7 @@ function setup(o: { recording?: boolean; baseUrl?: string | null; check?: CheckR
   const held = new Map<string, HeldTicket>(o.held ? [[SID, o.held]] : []);
   let recording = o.recording ?? false;
   const deps: DeepLinkFlowDeps = {
+    noticeAccepted: () => true,
     isRecording: () => recording,
     getBaseUrl: () => (o.baseUrl === undefined ? SOLACE : o.baseUrl),
     checkTicket: async (baseUrl, sessionId, ticket) => {
@@ -54,7 +55,7 @@ describe("deep link → recording", () => {
     const r = await t.flow.handle(link());
     expect(r.ok).toBe(true);
     expect(t.checks).toEqual([{ baseUrl: SOLACE, sessionId: SID, ticket: LINK_TICKET }]);
-    expect(t.saved).toEqual([{ sessionId: SID, ticket: UPLOAD_TICKET, held: { sendBy: SEND_BY, dialMode: "3cx" } }]);
+    expect(t.saved).toEqual([{ sessionId: SID, ticket: UPLOAD_TICKET, held: { sendBy: SEND_BY, dialMode: "3cx", origin: SOLACE, linkTicketHash: hashLinkTicket(LINK_TICKET) } }]);
     expect(t.started).toEqual([{ sessionId: SID, dialMode: "3cx", sendBy: SEND_BY }]);
   });
 
@@ -123,7 +124,7 @@ describe("deep link → recording", () => {
   });
 
   it("reuses the upload ticket it already holds for the same session, without a second check", async () => {
-    const t = setup({ held: { sendBy: SEND_BY, dialMode: "self_dial" } });
+    const t = setup({ held: { sendBy: SEND_BY, dialMode: "self_dial", origin: SOLACE, linkTicketHash: hashLinkTicket(LINK_TICKET) } });
     const r = await t.flow.handle(link());
     expect(r.ok).toBe(true);
     expect(t.checks).toHaveLength(0);
@@ -131,7 +132,7 @@ describe("deep link → recording", () => {
   });
 
   it("checks again when the held ticket's send window has closed", async () => {
-    const t = setup({ held: { sendBy: "2026-10-01T00:00:00.000Z", dialMode: "3cx" } });
+    const t = setup({ held: { sendBy: "2026-10-01T00:00:00.000Z", dialMode: "3cx", origin: SOLACE, linkTicketHash: hashLinkTicket(LINK_TICKET) } });
     await t.flow.handle(link());
     expect(t.checks).toHaveLength(1);
   });

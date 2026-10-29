@@ -7,7 +7,7 @@ import type { SavedCall } from "./callJobs";
 import { isTrack } from "./callFiles";
 import { isValidCallId, makeCallId } from "./callId";
 import { CallWriter } from "./chunkStore";
-import type { LinkedSession } from "./deepLinkFlow";
+import { NOTICE_FIRST_MESSAGE, type LinkedSession } from "./deepLinkFlow";
 import type { BaseSettingsView, BeginResult, EndResult, MicProcessing, RecorderState } from "./ipcTypes";
 import { checkRecordingsDir, defaultRecordingsDir } from "./recordingsFolder";
 import { recoverLeftovers } from "./recovery";
@@ -18,6 +18,8 @@ import { SHORTCUTS } from "./shortcuts";
 const MAX_CHUNK_BYTES = 4 * 1024 * 1024;
 /** A Solace session armed by a deep link must start recording within this time, or it is dropped. */
 const ARMED_SESSION_MS = 60_000;
+/** Recordings folders remembered for the 3-day delete (APP review I2a). */
+const MAX_KNOWN_DIRS = 20;
 
 export interface ControllerDeps {
   userDataDir: string;
@@ -45,7 +47,36 @@ export class RecorderController {
 
   async init(): Promise<void> {
     this.settings = await loadSettings(this.settingsFile);
+    await this.remember(this.recordingsDir());
     await this.recover();
+  }
+
+  /** D-126 (APP review I1): nothing records until the TA accepted the notice in the set-up check. */
+  noticeAccepted(): boolean {
+    return !!this.settings.noticeAcceptedAt;
+  }
+
+  /** Every recordings folder this app has used (newest last): the 3-day delete sweeps them all (I2a). */
+  knownRecordingsDirs(): string[] {
+    const all = [...this.settings.knownRecordingsDirs, this.recordingsDir()];
+    const seen = new Set<string>();
+    return all.filter((d) => {
+      const k = d.toLowerCase();
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  }
+
+  private async remember(dir: string): Promise<void> {
+    if (this.settings.knownRecordingsDirs.some((d) => d.toLowerCase() === dir.toLowerCase())) return;
+    const knownRecordingsDirs = [...this.settings.knownRecordingsDirs, dir].slice(-MAX_KNOWN_DIRS);
+    await this.updateSettings({ knownRecordingsDirs }).catch(() => undefined);
+  }
+
+  /** Drop a Solace session armed by a link (a local start must never become that call, APP review M4). */
+  disarm(): void {
+    this.armed = null;
   }
 
   /** The current settings (no secrets live there). */
@@ -137,6 +168,7 @@ export class RecorderController {
     if (!check.ok) return check.message;
     this.settings = { ...this.settings, recordingsDir: dir };
     await saveSettings(this.settingsFile, this.settings);
+    await this.remember(dir);
     await this.recover();
     return null;
   }
@@ -151,7 +183,20 @@ export class RecorderController {
     this.deps.onStateChange(this.guard.state);
   }
 
-  async beginCall(mic: MicProcessing): Promise<BeginResult> {
+  /**
+   * `linked`: the start a Solace link pressed — it records the armed session, or nothing if that expired.
+   * `local`: the button, tray or a shortcut — never a Solace session (any armed one is dropped).
+   */
+  async beginCall(mic: MicProcessing, intent: "local" | "linked" = "local"): Promise<BeginResult> {
+    if (!this.noticeAccepted()) {
+      this.armed = null;
+      return { ok: false, code: "notice", message: NOTICE_FIRST_MESSAGE };
+    }
+    const session = intent === "linked" ? this.takeArmed() : null;
+    if (intent === "local") this.armed = null;
+    if (intent === "linked" && !session) {
+      return { ok: false, message: 'The Solace link timed out before recording started. Press "Call & record" in Solace again.' };
+    }
     const check = this.guard.tryBegin();
     if (!check.ok) return check;
     const problem = this.dirProblem();
@@ -159,7 +204,6 @@ export class RecorderController {
       this.guard.ended();
       return { ok: false, message: problem };
     }
-    const session = this.takeArmed();
     // A Solace call is named by its session id (D-84); a call without a session gets a local id (D-82).
     const callId = session ? session.sessionId : makeCallId(new Date());
     if (session && this.hasCall(callId)) {

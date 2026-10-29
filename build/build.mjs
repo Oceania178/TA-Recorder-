@@ -4,7 +4,7 @@ import { cpSync, mkdirSync, existsSync } from "node:fs";
 
 const common = { bundle: true, sourcemap: true, logLevel: "info" };
 await build({ ...common, entryPoints: ["src/main/main.ts"], outfile: "dist/main/main.js", platform: "node", format: "cjs", external: ["electron"] });
-for (const preload of ["preload", "decoderPreload"]) {
+for (const preload of ["preload", "barPreload", "decoderPreload"]) {
   if (existsSync(`src/main/${preload}.ts`)) {
     await build({ ...common, entryPoints: [`src/main/${preload}.ts`], outfile: `dist/main/${preload}.js`, platform: "node", format: "cjs", external: ["electron"] });
   }

@@ -16,9 +16,10 @@ import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
-  JobQueue, QueueRunner, formatIsoWithOffset, sendJob, sweepRecordings, transcribeJob,
-  type DecodedCall, type FetchLike, type Job, type StepOutcome,
+  JobQueue, QueueRunner, formatIsoWithOffset, sendJob, transcribeJob,
+  type DecodedCall, type FetchLike, type Job, type PcmSource, type StepOutcome,
 } from "../core";
+import { sweepRoots } from "./inProgressSweep";
 import type { LinkedSession } from "./deepLinkFlow";
 
 export interface SavedCall {
@@ -35,13 +36,17 @@ export interface CallJobsDeps {
   secrets: {
     getGeminiKey(): Promise<string | null>;
     getTicket(id: string): Promise<string | null>;
+    /** The held ticket's details: its origin is where the transcript goes (APP review M2). */
+    heldTicket(id: string): Promise<{ origin: string } | null>;
     forgetTicket(id: string): Promise<void>;
   };
   getBaseUrl(): string | null;
   getModel(): string;
   fetch: FetchLike;
-  /** Decode the call's left and right files to 16 kHz PCM (decoder page + temp files). */
-  loadPcm(job: Job): Promise<DecodedCall | null>;
+  /** Decode the call's left and right files to 16 kHz PCM and open them as readers (APP review I3). */
+  openPcm?(job: Job): Promise<PcmSource | null>;
+  /** The older in-memory form (tests, short calls); used when openPcm is absent. */
+  loadPcm?(job: Job): Promise<DecodedCall | null>;
   /** After the transcript is written: delete the temp PCM files. */
   afterTranscript?(job: Job): Promise<void>;
   appVersion: string;
@@ -87,7 +92,11 @@ export class CallJobs {
       now: d.now,
       random: d.random,
       transcribe: (job) => self!.transcribe(job),
-      send: (job, ticket) => sendJob({ solace: { fetch: d.fetch, dev: d.dev, now: d.now }, getBaseUrl: d.getBaseUrl }, job, ticket),
+      send: async (job, ticket) => {
+        // The transcript goes to the origin the ticket was checked at (M2), never to a later setting.
+        const origin = (await d.secrets.heldTicket(job.id))?.origin ?? null;
+        return sendJob({ solace: { fetch: d.fetch, dev: d.dev, now: d.now }, getBaseUrl: () => origin }, job, ticket);
+      },
       getUploadTicket: (id) => d.secrets.getTicket(id),
       forgetUploadTicket: (id) => d.secrets.forgetTicket(id),
       onChange: (job) => {
@@ -110,7 +119,8 @@ export class CallJobs {
     }
     this.noKey = false;
     const outcome = await transcribeJob({
-      loadPcm: (j) => this.d.loadPcm(j),
+      openPcm: this.d.openPcm ? (j) => this.d.openPcm!(j) : undefined,
+      loadPcm: this.d.loadPcm ? (j) => this.d.loadPcm!(j) : undefined,
       getGeminiKey: async () => key,
       getModel: () => this.d.getModel(),
       gemini: { fetch: this.d.fetch, sleep: this.d.geminiSleep, random: this.d.random, now: this.d.now, maxAttempts: this.d.geminiMaxAttempts },
@@ -226,9 +236,13 @@ export class CallJobs {
     return this.noKey && this.queue.list().some((j) => j.stage === "recorded");
   }
 
-  /** D-140: delete call folders older than 3 days, then forget their jobs and upload tickets. Counts only. */
-  async sweep(root: string): Promise<{ deleted: number; kept: number; busy: number; errors: number }> {
-    const r = await sweepRecordings({ root, nowMs: this.now(), isBusy: (id) => this.queue.isBusy(id) });
+  /**
+   * D-140: delete call folders older than 3 days in every recordings folder used so far (I2a), and stuck
+   * .in-progress leftovers (I2b) except the call being recorded; then forget their jobs and tickets.
+   */
+  async sweep(roots: string | readonly string[], activeId: string | null = null): Promise<{ deleted: number; kept: number; busy: number; errors: number }> {
+    const list = typeof roots === "string" ? [roots] : roots;
+    const r = await sweepRoots({ roots: list, nowMs: this.now(), isBusy: (id) => this.queue.isBusy(id), skipId: activeId });
     const forgotten = await this.queue.forget(r.deletedIds);
     for (const id of r.deletedIds) await this.d.secrets.forgetTicket(id).catch(() => undefined);
     this.d.log?.("retention.sweep", { deleted: r.deleted, kept: r.kept, busy: r.busy, not_ours: r.notOurs, errors: r.errors, unsent: forgotten.unsent });
@@ -236,9 +250,13 @@ export class CallJobs {
     return { deleted: r.deleted, kept: r.kept, busy: r.busy, errors: r.errors };
   }
 
-  /** Jobs whose folder is gone (deleted by the logon cleanup task, or by hand) are dropped. */
+  /**
+   * Jobs whose folder is gone (deleted by the logon cleanup task, or by hand) are dropped — but only when
+   * the recordings folder itself is there: an unplugged or not-yet-mounted drive keeps its jobs and tickets
+   * until it is back (APP review M9).
+   */
   async forgetMissingFolders(): Promise<number> {
-    const gone = this.queue.list().filter((j) => !existsSync(j.folder)).map((j) => j.id);
+    const gone = this.queue.list().filter((j) => !existsSync(j.folder) && existsSync(dirname(j.folder))).map((j) => j.id);
     if (!gone.length) return 0;
     await this.queue.forget(gone);
     for (const id of gone) await this.d.secrets.forgetTicket(id).catch(() => undefined);

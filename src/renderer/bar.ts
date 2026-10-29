@@ -1,7 +1,14 @@
 // The floating bar shown while recording: timer, two meters, Pause/Resume, Stop. It only displays what the
 // recorder window reports and sends button presses to main.
+import type { BarApi } from "../main/barPreload";
 import type { StatusReport } from "../main/ipcTypes";
-import { api } from "./bridge";
+
+declare global {
+  interface Window {
+    barApi: BarApi;
+  }
+}
+const api = (): BarApi => window.barApi;
 import { formatElapsed } from "./elapsedClock";
 
 const $ = (id: string) => document.getElementById(id) as HTMLElement;

@@ -1,27 +1,26 @@
 // Locks the recorder pages down: no network (P7), only mic + system-audio permissions for our own pages,
 // no navigation, no new windows. System audio comes from Windows loopback through getDisplayMedia.
+// The rules themselves are pure and tested in pagePolicy.ts (APP review M10, M11).
 import { app, desktopCapturer, session } from "electron";
-import { pathToFileURL } from "node:url";
-import { isAllowedRendererRequest } from "./networkGuard";
+import { isAllowedRendererRequest, isOwnPage, permissionAllowed, permissionCheckAllowed } from "./pagePolicy";
 
-export function isOwnPage(url: string, rendererDir: string): boolean {
-  const base = pathToFileURL(rendererDir).href.toLowerCase();
-  return url.toLowerCase().startsWith(base + "/");
-}
+export { isOwnPage };
 
 export function applySecurityPolicy(rendererDir: string): void {
   const ses = session.defaultSession;
 
   ses.webRequest.onBeforeRequest((details, callback) => {
-    callback({ cancel: !isAllowedRendererRequest(details.url) });
+    callback({ cancel: !isAllowedRendererRequest(details.url, rendererDir) });
   });
 
-  ses.setPermissionRequestHandler((webContents, permission, callback) => {
+  ses.setPermissionRequestHandler((webContents, permission, callback, details) => {
     const own = isOwnPage(webContents.getURL(), rendererDir);
-    callback(own && (permission === "media" || permission === "display-capture"));
+    const mediaTypes = (details as { mediaTypes?: string[] }).mediaTypes;
+    callback(permissionAllowed(permission, mediaTypes, own));
   });
-  ses.setPermissionCheckHandler((webContents, permission) => {
-    return !!webContents && isOwnPage(webContents.getURL(), rendererDir) && permission === "media";
+  ses.setPermissionCheckHandler((webContents, permission, _origin, details) => {
+    const own = !!webContents && isOwnPage(webContents.getURL(), rendererDir);
+    return permissionCheckAllowed(permission, (details as { mediaType?: string }).mediaType, own);
   });
 
   // getDisplayMedia in the recorder page lands here: grant the screen (the page stops the video track

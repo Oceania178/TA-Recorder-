@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isAllowedRendererRequest } from "../../src/main/networkGuard";
+import { isAllowedRendererRequest as allowed } from "../../src/main/networkGuard";
+
+const DIR = "C:\\app\\dist\\renderer";
+const isAllowedRendererRequest = (url: string) => allowed(url, DIR);
 import { findDeepLinkArg, onDeepLink, setDeepLinkHandler } from "../../src/main/deepLinkHook";
 
 describe("renderer network block (P7)", () => {

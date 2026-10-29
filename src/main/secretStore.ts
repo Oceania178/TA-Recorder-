@@ -19,6 +19,10 @@ export interface HeldTicket {
   /** Solace's upload_until (ISO). */
   sendBy: string;
   dialMode: DialMode;
+  /** The Solace origin the ticket was checked at: the transcript goes only there (APP review M2). */
+  origin: string;
+  /** sha256 of the link ticket that was checked (APP review M3); the link ticket itself is never kept. */
+  linkTicketHash: string;
 }
 
 export type SaveResult = { ok: true } | { ok: false; message: string };
@@ -29,10 +33,8 @@ const SAFE_ID = /^[A-Za-z0-9_-]{1,100}$/;
 /** Google API keys are ~39 printable characters; allow some room, never spaces. */
 const KEY_SHAPE = /^[\x21-\x7e]{10,200}$/;
 
-interface StoredTicket {
+interface StoredTicket extends HeldTicket {
   ticket: string;
-  sendBy: string;
-  dialMode: DialMode;
 }
 
 export class SecretStore {
@@ -103,7 +105,7 @@ export class SecretStore {
 
   async saveTicket(sessionId: string, ticket: string, held: HeldTicket): Promise<void> {
     const file = this.ticketFile(sessionId);
-    const entry: StoredTicket = { ticket, sendBy: held.sendBy, dialMode: held.dialMode };
+    const entry: StoredTicket = { ticket, sendBy: held.sendBy, dialMode: held.dialMode, origin: held.origin, linkTicketHash: held.linkTicketHash };
     this.memoryTickets.set(sessionId, entry);
     if (this.canPersist()) await this.writeEncrypted(file, JSON.stringify(entry));
   }
@@ -117,6 +119,7 @@ export class SecretStore {
     try {
       const e = JSON.parse(text) as StoredTicket;
       if (typeof e.ticket !== "string" || typeof e.sendBy !== "string" || !isDialMode(e.dialMode)) return null;
+      if (typeof e.origin !== "string" || typeof e.linkTicketHash !== "string") return null;
       this.memoryTickets.set(sessionId, e);
       return e;
     } catch {
@@ -130,7 +133,7 @@ export class SecretStore {
 
   async heldTicket(sessionId: string): Promise<HeldTicket | null> {
     const e = await this.entry(sessionId);
-    return e ? { sendBy: e.sendBy, dialMode: e.dialMode } : null;
+    return e ? { sendBy: e.sendBy, dialMode: e.dialMode, origin: e.origin, linkTicketHash: e.linkTicketHash } : null;
   }
 
   async forgetTicket(sessionId: string): Promise<void> {

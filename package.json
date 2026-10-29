@@ -40,7 +40,8 @@
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "include": "build/installer.nsh"
-    }
+    },
+    "afterPack": "build/fuses.cjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",

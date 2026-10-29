@@ -29,6 +29,7 @@ const REASONS: Record<FailureReason, string> = {
   solace_invalid: "Solace said the transcript is not valid. Tell the app owner; take notes by hand in Solace.",
   solace_different_content: "Solace already has a different transcript for this call. Nothing was overwritten.",
   transcript_too_large: "The transcript is too large for Solace. Tell the app owner; take notes by hand in Solace.",
+  transcript_over_limits: "This transcript is longer than Solace accepts (5,000 turns or 300,000 characters). Open it here and paste the key parts into Solace by hand.",
   app_bug: "Something went wrong inside the app. Tell the app owner.",
   unexpected_error: "Something went wrong several times in a row. Press Retry later.",
 };

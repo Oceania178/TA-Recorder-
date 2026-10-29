@@ -8,6 +8,7 @@ import { checkOutputDevices } from "./outputDevices";
 import { initRecentCalls, refreshCalls } from "./recentCalls";
 import { initSettingsPanel, renderSettingsPanel } from "./settingsPanel";
 import { SilenceWatch } from "./silenceWatch";
+import { LONG_CALL_STOPPED, LONG_CALL_WARNING, longCallStatus } from "./longCall";
 import { initWizard, openWizard } from "./wizard";
 
 const TICK_MS = 200;
@@ -34,7 +35,9 @@ const STATUS_TEXT: Record<RecorderState, string> = {
   stopping: "Saving…",
 };
 
-function showMessage(text: string, kind: "info" | "error" | "ok" = "info"): void {
+const NOTICE_FIRST = "Open Set-up check and accept the notice first.";
+
+function showMessage(text: string, kind: "info" | "error" | "ok" | "warn" = "info"): void {
   const el = $("message");
   el.textContent = text;
   el.className = `message ${kind}`;
@@ -69,7 +72,14 @@ function micSettings(on: boolean) {
   return { echoCancellation: on, noiseSuppression: on, autoGainControl: on };
 }
 
-async function start(): Promise<void> {
+/** `linked`: pressed by a Solace link (main armed the session); `local`: the button, tray or a shortcut. */
+async function start(intent: "local" | "linked" = "local"): Promise<void> {
+  if (settings && !settings.noticeAccepted) {
+    // D-126 (APP review I1): no recording before the notice is accepted.
+    showMessage(NOTICE_FIRST, "error");
+    openWizard(settings);
+    return;
+  }
   if (state !== "idle") {
     showMessage("Already recording a call. Stop the current recording before starting a new one (one call at a time).", "error");
     return;
@@ -81,10 +91,11 @@ async function start(): Promise<void> {
   setState("starting");
   showMessage("Starting…");
   const micOn = settings.micProcessing;
-  const begin = await api().beginCall(micSettings(micOn));
+  const begin = await api().beginCall(micSettings(micOn), intent);
   if (!begin.ok) {
     setState("idle");
     showMessage(begin.message, "error");
+    if (begin.code === "notice" && settings) openWizard(settings);
     return;
   }
   const id = begin.callId;
@@ -183,6 +194,11 @@ function tick(): void {
   const now = performance.now();
   if (session && (state === "recording" || state === "paused")) {
     levels = state === "paused" ? [0, 0] : session.levels();
+    const long = longCallStatus(clock.elapsed(now));
+    if (long === "stop") {
+      void stop().then(() => showMessage(LONG_CALL_STOPPED, "warn"));
+      return;
+    }
     if (state === "recording") {
       const micSilent = silence[0].update(now, levels[0]);
       const otherSilent = silence[1].update(now, levels[1]);
@@ -191,6 +207,7 @@ function tick(): void {
         : otherSilent
           ? "No sound from the other side for over a minute. Is the call playing on the device the app records? See Device check."
           : null;
+      if (long === "warn") warning = LONG_CALL_WARNING;
     }
   }
   $("timer").textContent = formatElapsed(clock.elapsed(now));
@@ -230,7 +247,8 @@ function renderSettings(view: SettingsView): void {
 }
 
 function runCommand(cmd: string): void {
-  if (cmd === "start") void start();
+  if (cmd === "start") void start("local");
+  else if (cmd === "startLinked") void start("linked");
   else if (cmd === "stop") void stop();
   else if (cmd === "pause") void pause();
   else if (cmd === "resume") void resume();
@@ -239,7 +257,7 @@ function runCommand(cmd: string): void {
 
 async function init(): Promise<void> {
   window.__taRecorderCommand = runCommand;
-  $("btn-start").addEventListener("click", () => void start());
+  $("btn-start").addEventListener("click", () => void start("local"));
   $("btn-pause").addEventListener("click", () => void (state === "paused" ? resume() : pause()));
   $("btn-stop").addEventListener("click", () => void stop());
   $("btn-check-devices").addEventListener("click", () => void refreshDevices());

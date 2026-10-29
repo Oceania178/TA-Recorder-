@@ -37,6 +37,7 @@ export function createRecorderWindow(rendererDir: string, preload: string, show:
   return win;
 }
 
+/** The bar gets its own minimal preload (barPreload.ts): status in, three buttons out. */
 export function createBarWindow(rendererDir: string, preload: string): BrowserWindow {
   const area = screen.getPrimaryDisplay().workArea;
   const bar = new BrowserWindow({
@@ -66,6 +67,8 @@ export function createBarWindow(rendererDir: string, preload: string): BrowserWi
  * needs a user gesture, and commands from the tray or a shortcut have none. Only fixed command names go in.
  */
 export function sendCommandToRecorder(win: BrowserWindow, command: Command | "settings"): void {
+  const allowed: readonly string[] = ["start", "startLinked", "stop", "pause", "resume", "settings"];
+  if (!allowed.includes(command)) return;
   if (win.isDestroyed()) return;
   const name = JSON.stringify(command);
   void win.webContents.executeJavaScript(`window.__taRecorderCommand && window.__taRecorderCommand(${name})`, true).catch(() => undefined);

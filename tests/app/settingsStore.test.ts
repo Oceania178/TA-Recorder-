@@ -43,7 +43,7 @@ describe("settings file", () => {
     expect(await loadSettings(join(dir, "settings.json"))).toEqual(DEFAULT_SETTINGS);
     expect(DEFAULT_SETTINGS).toEqual({
       recordingsDir: null, micProcessing: false, solaceBaseUrl: null, geminiModel: null,
-      noticeAcceptedAt: null, wizardDoneAt: null, cleanupTaskFor: null,
+      noticeAcceptedAt: null, wizardDoneAt: null, cleanupTaskFor: null, knownRecordingsDirs: [],
     });
   });
 
@@ -113,9 +113,9 @@ describe("SecretStore", () => {
 
   it("holds an upload ticket per session, encrypted, and forgets it", async () => {
     const s = new SecretStore({ dir: join(dir, "secrets"), crypto: fakeSafeStorage() });
-    await s.saveTicket(SID, TICKET, { sendBy: "2026-11-01T00:00:00.000Z", dialMode: "3cx" });
+    await s.saveTicket(SID, TICKET, { sendBy: "2026-11-01T00:00:00.000Z", dialMode: "3cx", origin: "https://solace.vng.vn", linkTicketHash: "h" });
     expect(await s.getTicket(SID)).toBe(TICKET);
-    expect(await s.heldTicket(SID)).toEqual({ sendBy: "2026-11-01T00:00:00.000Z", dialMode: "3cx" });
+    expect(await s.heldTicket(SID)).toEqual({ sendBy: "2026-11-01T00:00:00.000Z", dialMode: "3cx", origin: "https://solace.vng.vn", linkTicketHash: "h" });
     expect(await allFileText(dir)).not.toContain(TICKET);
     const again = new SecretStore({ dir: join(dir, "secrets"), crypto: fakeSafeStorage() });
     expect(await again.getTicket(SID)).toBe(TICKET);
@@ -126,20 +126,20 @@ describe("SecretStore", () => {
 
   it("keeps a ticket in memory only when Windows encryption is missing", async () => {
     const s = new SecretStore({ dir: join(dir, "secrets"), crypto: fakeSafeStorage(false) });
-    await s.saveTicket(SID, TICKET, { sendBy: "2026-11-01T00:00:00.000Z", dialMode: "self_dial" });
+    await s.saveTicket(SID, TICKET, { sendBy: "2026-11-01T00:00:00.000Z", dialMode: "self_dial", origin: "https://solace.vng.vn", linkTicketHash: "h" });
     expect(await s.getTicket(SID)).toBe(TICKET);
     expect(existsSync(join(dir, "secrets"))).toBe(false);
   });
 
   it("refuses a session id that could leave its folder", async () => {
     const s = new SecretStore({ dir: join(dir, "secrets"), crypto: fakeSafeStorage() });
-    await expect(s.saveTicket("..\\..\\x", TICKET, { sendBy: "2026-11-01T00:00:00.000Z", dialMode: "3cx" })).rejects.toThrow();
+    await expect(s.saveTicket("..\\..\\x", TICKET, { sendBy: "2026-11-01T00:00:00.000Z", dialMode: "3cx", origin: "https://solace.vng.vn", linkTicketHash: "h" })).rejects.toThrow();
   });
 
   it("prunes tickets whose send window has closed", async () => {
     const s = new SecretStore({ dir: join(dir, "secrets"), crypto: fakeSafeStorage() });
-    await s.saveTicket(SID, TICKET, { sendBy: "2026-10-01T00:00:00.000Z", dialMode: "3cx" });
-    await s.saveTicket("cmh2x9k0a0002qz8v7y6t5r4e", TICKET, { sendBy: "2026-12-01T00:00:00.000Z", dialMode: "3cx" });
+    await s.saveTicket(SID, TICKET, { sendBy: "2026-10-01T00:00:00.000Z", dialMode: "3cx", origin: "https://solace.vng.vn", linkTicketHash: "h" });
+    await s.saveTicket("cmh2x9k0a0002qz8v7y6t5r4e", TICKET, { sendBy: "2026-12-01T00:00:00.000Z", dialMode: "3cx", origin: "https://solace.vng.vn", linkTicketHash: "h" });
     expect(await s.pruneExpired(Date.parse("2026-10-29T00:00:00Z"))).toBe(1);
     const again = new SecretStore({ dir: join(dir, "secrets"), crypto: fakeSafeStorage() });
     expect(await again.getTicket(SID)).toBeNull();

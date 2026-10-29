@@ -90,6 +90,7 @@ function deps(fetch: FetchLike, over: Partial<CallJobsDeps> = {}): CallJobsDeps 
         ticketReads.push(id);
         return tickets.get(id) ?? null;
       },
+      heldTicket: async (id) => (tickets.has(id) ? { origin: SOLACE } : null),
       forgetTicket: async (id) => {
         forgotten.push(id);
         tickets.delete(id);
@@ -225,6 +226,7 @@ describe("CallJobs: after Stop", () => {
   });
 
   it("forgets jobs whose folder disappeared while the app was closed (the logon cleanup task)", async () => {
+    await mkdir(recordings, { recursive: true }); // the recordings folder is there; only the call folder is gone
     const q = await JobQueue.open(join(base, "userData", "queue.json"));
     await q.add({ id: SID, sessionId: SID, dialMode: "3cx", folder: join(recordings, SID), startedAt: "2026-10-29T10:00:00+07:00", endedAt: "2026-10-29T10:00:03+07:00", sendBy: null });
     const net = fakeNet();

@@ -44,7 +44,7 @@ describe("Recent calls", () => {
     const reasons: FailureReason[] = [
       "no_gemini_key", "gemini_key_rejected", "gemini_model_not_found", "gemini_bad_request", "audio_missing", "no_solace_address",
       "upload_ticket_missing", "upload_window_closed", "transcript_missing", "solace_refused", "solace_invalid",
-      "solace_different_content", "transcript_too_large", "app_bug", "unexpected_error",
+      "solace_different_content", "transcript_too_large", "transcript_over_limits", "app_bug", "unexpected_error",
     ];
     for (const r of reasons) expect(reasonText(r), r).toMatch(/^[A-Z].{10,}/);
   });

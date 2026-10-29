@@ -100,3 +100,28 @@ export async function removeCleanupTask(run: CommandRunner): Promise<boolean> {
     return false;
   }
 }
+
+/** True when the task exists for this user (schtasks /Query answers 0). */
+export async function cleanupTaskExists(run: CommandRunner): Promise<boolean> {
+  try {
+    return (await run(SCHTASKS, ["/Query", "/TN", CLEANUP_TASK_NAME])).code === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * At every start (APP review M8): the task must exist. It is (re-)created when it was made for another
+ * program or version, or when it is missing (deleted by hand, a reinstall of the same version…).
+ */
+export async function keepCleanupTask(o: {
+  run: CommandRunner;
+  /** settings.cleanupTaskFor: the program and version it was last created for. */
+  recordedFor: string | null;
+  forThis: string;
+  create(): Promise<boolean>;
+}): Promise<{ ok: boolean; created: boolean }> {
+  if (o.recordedFor === o.forThis && (await cleanupTaskExists(o.run))) return { ok: true, created: false };
+  const ok = await o.create();
+  return { ok, created: ok };
+}

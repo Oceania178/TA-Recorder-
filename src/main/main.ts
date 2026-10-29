@@ -10,25 +10,28 @@ import { existsSync, mkdirSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { tmpdir, userInfo } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { checkTicket, DEFAULT_GEMINI_MODEL, type FetchLike, type ResponseLike } from "../core";
+import { createServer } from "node:http";
+import { checkTicket, DEFAULT_GEMINI_MODEL, type FetchLike } from "../core";
 import { AppLog } from "./appLog";
 import { CallJobs } from "./callJobs";
 import { callRows } from "./callsView";
-import { ensureCleanupTask, type CommandRunner } from "./cleanupTask";
+import { ensureCleanupTask, keepCleanupTask, type CommandRunner } from "./cleanupTask";
 import { RecorderController } from "./controller";
 import { DecoderClient, decodeWebmToPcmFile } from "./decoderClient";
 import { DecoderWindow } from "./decoderWindow";
 import { DeepLinkFlow, type LinkOutcome } from "./deepLinkFlow";
 import { findDeepLinkArg, onDeepLink, setDeepLinkHandler } from "./deepLinkHook";
+import { createNetFetch } from "./netFetch";
+import { handleSecondInstance } from "./secondInstance";
+import { requestLocalStart } from "./startGate";
 import { IPC, type AppMessage, type Command, type RecorderState, type SettingsView, type StatusReport } from "./ipcTypes";
-import { deletePcmFiles, makeLoadPcm } from "./pcmFiles";
+import { deletePcmFiles, makeOpenPcm } from "./pcmFiles";
 import { SecretStore } from "./secretStore";
 import { applySecurityPolicy, isOwnPage } from "./security";
-import { ALREADY_RECORDING_MESSAGE } from "./sessionGuard";
 import { clearGeminiKey, setGeminiKey, setGeminiModel, setSolaceAddress, type SettingsHost } from "./settingsActions";
 import { runCaptureSelfTest, runCrashSelfTest } from "./smokeCapture";
 import { commandForShortcut, SHORTCUTS, type ShortcutAction } from "./shortcuts";
-import { isSweepMode, runHeadlessSweep } from "./sweepMode";
+import { isPurgeMode, isSweepMode, runHeadlessSweep, runUninstallPurge } from "./sweepMode";
 import { RecorderTray } from "./tray";
 import { telLink, testSolaceAddress, WINDOWS_MIC_SETTINGS } from "./wizardChecks";
 import { createBarWindow, createRecorderWindow, sendCommandToRecorder } from "./windows";
@@ -36,11 +39,13 @@ import { createBarWindow, createRecorderWindow, sendCommandToRecorder } from "./
 const PROTOCOL = "tacallrecorder";
 const SMOKE = process.argv.includes("--smoke");
 const SWEEP = isSweepMode(process.argv);
+const PURGE = isPurgeMode(process.argv);
 const START_HIDDEN = process.argv.includes("--hidden");
 /** Development only: allows http://localhost as the Solace address. Ignored in the installed app. */
 const DEV = !app.isPackaged && process.argv.includes("--dev");
 const rendererDir = join(__dirname, "..", "renderer");
 const preloadPath = join(__dirname, "preload.js");
+const barPreloadPath = join(__dirname, "barPreload.js");
 const decoderPreloadPath = join(__dirname, "decoderPreload.js");
 const SWEEP_EVERY_MS = 3600_000;
 
@@ -52,7 +57,12 @@ if (SMOKE) {
 }
 
 const log = new AppLog({ file: join(app.getPath("userData"), "app.log") });
-const netFetch: FetchLike = (url, init) => fetch(url, init as RequestInit) as unknown as Promise<ResponseLike>;
+/** Chromium's network stack in its own session (APP review M12); set once the app is ready. */
+let chromiumFetch: FetchLike | null = null;
+const netFetch: FetchLike = (url, init) => {
+  if (!chromiumFetch) return Promise.reject(new Error("The network is not ready yet"));
+  return chromiumFetch(url, init);
+};
 
 let recorderWin: BrowserWindow | null = null;
 let barWin: BrowserWindow | null = null;
@@ -69,6 +79,7 @@ let rendererReady: () => void = () => undefined;
 const rendererReadyPromise = new Promise<void>((done) => (rendererReady = done));
 
 function main(): void {
+  if (PURGE) return purgeAndExit();
   if (SWEEP) return sweepAndExit();
   if (!SMOKE && !app.requestSingleInstanceLock()) {
     app.quit();
@@ -78,11 +89,12 @@ function main(): void {
   registerProtocol();
 
   app.on("second-instance", (_event, argv) => {
-    // The logon cleanup task ran while the app is open: this instance sweeps itself, quietly.
-    if (isSweepMode(argv)) return void runSweep();
-    const url = findDeepLinkArg(argv);
-    if (url) onDeepLink(url);
-    showRecorder();
+    handleSecondInstance(argv, {
+      sweep: () => void runSweep(),
+      deepLink: (url) => onDeepLink(url),
+      show: () => showRecorder(),
+      log: (e, f) => log.event(e, f),
+    });
   });
 
   app.on("window-all-closed", () => {
@@ -104,7 +116,17 @@ function main(): void {
   void app.whenReady().then(onReady);
 }
 
-/** `--sweep` (the Task Scheduler task, D-140): delete expired calls without any window, then exit. */
+/** `--uninstall-purge` (the uninstaller, a real uninstall only): delete every recording of ours, then exit. */
+function purgeAndExit(): void {
+  void runUninstallPurge({ userDataDir: app.getPath("userData"), documentsDir: app.getPath("documents"), env: process.env, log: (e, f) => log.event(e, f) })
+    .catch(() => log.event("retention.uninstall_purge_failed", {}))
+    .finally(() => void log.flush().finally(() => app.exit(0)));
+}
+
+/**
+ * `--sweep` (the Task Scheduler task, D-140): delete expired calls without any window, then exit. It holds
+ * the single-instance lock while it runs, so the app is not running and no job can be busy (APP review I2d).
+ */
 function sweepAndExit(): void {
   if (!app.requestSingleInstanceLock()) {
     // The app is running: it received this as a second instance and sweeps itself.
@@ -134,6 +156,7 @@ function registerProtocol(): void {
 
 async function onReady(): Promise<void> {
   applySecurityPolicy(rendererDir);
+  chromiumFetch = createNetFetch();
   log.event("app.start", { smoke: SMOKE, dev: DEV });
   secrets = new SecretStore({ dir: join(app.getPath("userData"), "secrets"), crypto: safeStorage });
 
@@ -165,11 +188,13 @@ async function onReady(): Promise<void> {
   } catch {
     c.addNotice("Could not check the recordings folder for unfinished recordings.");
   }
+  // The self-tests record into a throwaway folder; the notice (D-126) is a decision for a person, not a test.
+  if (SMOKE && !c.noticeAccepted()) await c.updateSettings({ noticeAcceptedAt: new Date().toISOString() });
   void secrets.pruneExpired(Date.now()).catch(() => undefined);
 
   registerIpc(c);
   recorderWin = createRecorderWindow(rendererDir, preloadPath, !START_HIDDEN && !SMOKE);
-  barWin = createBarWindow(rendererDir, preloadPath);
+  barWin = createBarWindow(rendererDir, barPreloadPath);
   wireRecorderWindow(recorderWin);
 
   tray = new RecorderTray({
@@ -213,7 +238,7 @@ async function openJobs(c: RecorderController, s: SecretStore): Promise<CallJobs
     getBaseUrl: () => c.appSettings.solaceBaseUrl,
     getModel: () => c.appSettings.geminiModel ?? DEFAULT_GEMINI_MODEL,
     fetch: netFetch,
-    loadPcm: makeLoadPcm((webm, pcm) => decodeWebmToPcmFile(client, webm, pcm)),
+    openPcm: makeOpenPcm((webm, pcm) => decodeWebmToPcmFile(client, webm, pcm)),
     afterTranscript: (job) => deletePcmFiles(job.folder, job.id),
     appVersion: app.getVersion(),
     dev: DEV,
@@ -222,11 +247,11 @@ async function openJobs(c: RecorderController, s: SecretStore): Promise<CallJobs
   });
 }
 
-/** D-140: delete calls older than 3 days (at start-up, then every hour). */
+/** D-140: delete calls older than 3 days in every recordings folder used so far (at start-up, then hourly). */
 async function runSweep(): Promise<void> {
-  if (!controller || !jobs || controller.dirProblem()) return;
+  if (!controller || !jobs) return;
   try {
-    await jobs.sweep(controller.recordingsDir());
+    await jobs.sweep(controller.knownRecordingsDirs(), controller.activeCallId);
   } catch {
     log.event("retention.sweep_failed", {});
   }
@@ -247,19 +272,25 @@ async function ensureCleanupTaskOnce(c: RecorderController): Promise<void> {
   const devRequested = !app.isPackaged && process.argv.includes("--register-cleanup-task");
   if (!app.isPackaged && !devRequested) return;
   const forThis = `${process.execPath}|${app.getVersion()}`;
-  if (c.appSettings.cleanupTaskFor === forThis) return;
   const user = userInfo().username;
   const domain = process.env.USERDOMAIN?.trim();
-  const ok = await ensureCleanupTask({
+  // At every start: (re-)create it when it was made for another version, or when it is missing (M8).
+  const r = await keepCleanupTask({
     run: runCommand,
-    exePath: process.execPath,
-    extraArgs: app.isPackaged ? [] : [resolve(process.argv[1] ?? ".")],
-    userId: domain ? `${domain}\\${user}` : user,
-    xmlFile: join(app.getPath("temp"), `ta-call-recorder-cleanup-${process.pid}.xml`),
+    recordedFor: c.appSettings.cleanupTaskFor,
+    forThis,
+    create: () =>
+      ensureCleanupTask({
+        run: runCommand,
+        exePath: process.execPath,
+        extraArgs: app.isPackaged ? [] : [resolve(process.argv[1] ?? ".")],
+        userId: domain ? `${domain}\\${user}` : user,
+        xmlFile: join(app.getPath("temp"), `ta-call-recorder-cleanup-${process.pid}.xml`),
+      }),
   });
-  log.event("cleanup_task.create", { ok });
-  if (ok) await c.updateSettings({ cleanupTaskFor: forThis });
-  else c.addNotice("The daily clean-up of old recordings could not be scheduled in Windows. The app still deletes them while it runs.");
+  log.event("cleanup_task.check", { ok: r.ok, created: r.created });
+  if (r.created) await c.updateSettings({ cleanupTaskFor: forThis });
+  else if (!r.ok) c.addNotice("The daily clean-up of old recordings could not be scheduled in Windows. The app still deletes them while it runs.");
 }
 
 // ---------- Step 5: Solace's deep link ----------
@@ -268,6 +299,7 @@ function wireDeepLinks(c: RecorderController): void {
   const s = secrets;
   if (!s) return;
   const flow = new DeepLinkFlow({
+    noticeAccepted: () => c.noticeAccepted(),
     isRecording: () => c.guard.isActive,
     getBaseUrl: () => c.appSettings.solaceBaseUrl,
     checkTicket: (baseUrl, sessionId, ticket) => checkTicket({ fetch: netFetch, dev: DEV }, baseUrl, sessionId, ticket),
@@ -278,7 +310,7 @@ function wireDeepLinks(c: RecorderController): void {
       showRecorder();
       // On a first launch from the link the page may still be loading: press Start once it is ready.
       void rendererReadyPromise.then(() => {
-        if (recorderWin) sendCommandToRecorder(recorderWin, "start");
+        if (recorderWin) sendCommandToRecorder(recorderWin, "startLinked");
       });
     },
     log: (e, f) => log.event(e, f),
@@ -291,6 +323,12 @@ function wireDeepLinks(c: RecorderController): void {
 function tellLinkOutcome(outcome: LinkOutcome): void {
   tellApp({ kind: outcome.ok ? "ok" : "error", text: outcome.message });
   if (!outcome.ok) notify("TA Call Recorder", outcome.message);
+  if (!outcome.ok && outcome.code === "notice") showWizard();
+  if (outcome.ok && outcome.clockWarning) {
+    // Shown after the start message, and as a notification: Solace may reject a call with a wrong clock.
+    setTimeout(() => tellApp({ kind: "warn", text: outcome.clockWarning ?? "" }), 1500);
+    notify("TA Call Recorder", outcome.clockWarning);
+  }
 }
 
 function tellApp(message: AppMessage): void {
@@ -327,7 +365,7 @@ async function finishSmoke(): Promise<void> {
       .catch(() => "error");
     const probeOk = probe === "string,true,true,invalid,true,true";
     console.log(`smoke: settings, recent calls and wizard ${probeOk ? "answer" : `did not answer (${probe})`}`);
-    ok = probeOk;
+    ok = probeOk && (await smokeNetwork());
   }
   if (ok && process.argv.includes("--smoke-capture") && recorderWin && controller) {
     const client = decoder;
@@ -345,6 +383,41 @@ async function finishSmoke(): Promise<void> {
   jobs?.close();
   await log.flush();
   app.exit(ok ? 0 : 1);
+}
+
+/**
+ * The app's network path (Chromium, its own session) against a throwaway server on 127.0.0.1 — no real
+ * network: an answer comes back, and a redirect is refused (D-143).
+ */
+async function smokeNetwork(): Promise<boolean> {
+  const server = createServer((req, res) => {
+    if (req.url === "/redirect") {
+      res.writeHead(302, { Location: "http://127.0.0.1:9/elsewhere" });
+      res.end();
+    } else {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    }
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const port = (server.address() as { port: number }).port;
+  let answered = false;
+  let redirectRefused = false;
+  try {
+    const r = await netFetch(`http://127.0.0.1:${port}/ok`, { method: "GET", headers: {}, redirect: "error" });
+    answered = r.status === 200 && JSON.parse(await r.text()).ok === true;
+    try {
+      await netFetch(`http://127.0.0.1:${port}/redirect`, { method: "GET", headers: {}, redirect: "error" });
+    } catch {
+      redirectRefused = true;
+    }
+  } catch {
+    answered = false;
+  } finally {
+    server.close();
+  }
+  console.log(`smoke: network (Chromium stack) answered=${answered} redirect_refused=${redirectRefused}`);
+  return answered && redirectRefused;
 }
 
 // ---------- windows, tray, shortcuts ----------
@@ -385,14 +458,26 @@ function notify(title: string, body: string): void {
   if (Notification.isSupported()) new Notification({ title, body, silent: true }).show();
 }
 
-/** Start a local-only recording (tray, shortcut, button), unless a call is already being recorded (D-39). */
+/**
+ * Start a local-only recording (tray, shortcut): refused until the D-126 notice is accepted (the set-up
+ * check opens) or while a call is recorded (D-39); any armed Solace session is dropped first (M4).
+ */
 export function requestStart(): void {
-  if (!controller || !recorderWin) return;
-  if (controller.guard.isActive) {
-    notify("TA Call Recorder", ALREADY_RECORDING_MESSAGE);
-    return;
-  }
-  sendCommandToRecorder(recorderWin, "start");
+  const c = controller;
+  if (!c || !recorderWin) return;
+  requestLocalStart({
+    noticeAccepted: () => c.noticeAccepted(),
+    isRecording: () => c.guard.isActive,
+    disarm: () => c.disarm(),
+    start: () => {
+      if (recorderWin) sendCommandToRecorder(recorderWin, "start");
+    },
+    refuse: (message, openWizard) => {
+      notify("TA Call Recorder", message);
+      tellApp({ kind: "error", text: message });
+      if (openWizard) showWizard();
+    },
+  });
 }
 
 function command(cmd: Command): void {
@@ -490,9 +575,10 @@ function registerIpc(c: RecorderController): void {
   const host = () => (secrets ? settingsHost(c, secrets) : null);
   const text = (v: unknown) => (typeof v === "string" ? v : "");
 
-  handle(IPC.beginCall, (mic) => {
+  handle(IPC.beginCall, (mic, intent) => {
     const m = (mic ?? {}) as Record<string, unknown>;
-    return c.beginCall({ echoCancellation: m.echoCancellation === true, noiseSuppression: m.noiseSuppression === true, autoGainControl: m.autoGainControl === true });
+    const micProcessing = { echoCancellation: m.echoCancellation === true, noiseSuppression: m.noiseSuppression === true, autoGainControl: m.autoGainControl === true };
+    return c.beginCall(micProcessing, intent === "linked" ? "linked" : "local");
   });
   handle(IPC.appendChunk, (callId, track, data) => c.appendChunk(callId, track, data));
   handle(IPC.markPause, (callId, kind, recordedMs) => c.markPause(callId, kind, recordedMs));

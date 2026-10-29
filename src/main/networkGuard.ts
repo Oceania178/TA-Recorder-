@@ -1,10 +1,3 @@
-// P7: the recorder windows never talk to the network. Only the app's own files and in-memory data load.
-const ALLOWED_PROTOCOLS = new Set(["file:", "devtools:", "data:", "blob:"]);
-
-export function isAllowedRendererRequest(url: string): boolean {
-  try {
-    return ALLOWED_PROTOCOLS.has(new URL(url).protocol);
-  } catch {
-    return false;
-  }
-}
+// P7: the recorder windows never talk to the network. Only the app's own files (inside the renderer folder,
+// APP review M10) and in-memory data load. The rule lives in pagePolicy.ts.
+export { isAllowedRendererRequest } from "./pagePolicy";

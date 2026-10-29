@@ -42,7 +42,7 @@ describe("--sweep mode", () => {
     expect(isSweepMode(["C:\\app.exe"])).toBe(false);
   });
 
-  it("deletes expired calls headless, keeps fresh and busy ones, and leaves the queue file alone", async () => {
+  it("deletes expired calls headless (a stale busy stage is ignored: it holds the lock), keeps fresh ones, leaves the queue file alone", async () => {
     await call(OLD, NOW - 4 * DAY);
     await call(BUSY, NOW - 4 * DAY);
     await call(FRESH, NOW - 1 * DAY);
@@ -54,22 +54,22 @@ describe("--sweep mode", () => {
 
     const r = await runHeadlessSweep({ userDataDir: userData, documentsDir: join(base, "Documents"), env: {}, nowMs: NOW, log: (e, f) => void logs.push(`${e} ${JSON.stringify(f)}`) });
 
-    expect(r).toMatchObject({ ran: true, deleted: 1, kept: 1, busy: 1, errors: 0 });
+    expect(r).toMatchObject({ ran: true, deleted: 2, kept: 1, busy: 0, errors: 0 });
     expect(existsSync(join(recordings, OLD))).toBe(false);
-    expect(existsSync(join(recordings, BUSY))).toBe(true);
+    expect(existsSync(join(recordings, BUSY))).toBe(false);
     expect(existsSync(join(recordings, FRESH))).toBe(true);
     expect(existsSync(join(userData, "secrets", "tickets", `${OLD}.bin`))).toBe(false);
     expect(await readFile(join(userData, "queue.json"), "utf8")).toBe(queueText);
-    expect(logs.join("\n")).toContain('"deleted":1');
+    expect(logs.join("\n")).toContain('"deleted":2');
     expect(logs.join("\n")).not.toContain(OLD);
     expect(logs.join("\n")).not.toContain(recordings);
   });
 
-  it("does nothing when the recordings folder is refused (inside OneDrive)", async () => {
+  it("still deletes old calls in a folder OneDrive has since taken over (deleting is always safe, I2a)", async () => {
     await call(OLD, NOW - 4 * DAY);
     const r = await runHeadlessSweep({ userDataDir: userData, documentsDir: join(base, "Documents"), env: { OneDrive: base }, nowMs: NOW });
-    expect(r.ran).toBe(false);
-    expect(existsSync(join(recordings, OLD))).toBe(true);
+    expect(r).toMatchObject({ ran: true, deleted: 1 });
+    expect(existsSync(join(recordings, OLD))).toBe(false);
   });
 
   it("works when there is no queue file and no recordings folder yet", async () => {
