@@ -1,0 +1,116 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mkdtemp, readdir, readFile, rm, mkdir, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { RecorderController } from "../../src/main/controller";
+import type { RecorderState } from "../../src/main/ipcTypes";
+
+const MIC = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+let base: string;
+let states: RecorderState[];
+
+function make(env: Record<string, string> = {}) {
+  return new RecorderController({
+    userDataDir: join(base, "userData"),
+    documentsDir: join(base, "Documents"),
+    env,
+    appVersion: "0.1.0",
+    onStateChange: (s) => states.push(s),
+  });
+}
+const recordings = () => join(base, "Documents", "Sound Recordings", "TA Call Recorder");
+
+beforeEach(async () => {
+  base = await mkdtemp(join(tmpdir(), "tacr-ctrl-"));
+  states = [];
+});
+afterEach(async () => {
+  await rm(base, { recursive: true, force: true });
+});
+
+describe("RecorderController", () => {
+  it("records a whole call into three files plus metadata", async () => {
+    const c = make();
+    await c.init();
+    const begin = await c.beginCall(MIC);
+    expect(begin.ok).toBe(true);
+    if (!begin.ok) return;
+    expect(c.guard.state).toBe("starting");
+    c.noteCaptureStarted();
+    await c.appendChunk(begin.callId, "stereo", new TextEncoder().encode("S").buffer);
+    await c.appendChunk(begin.callId, "left", new Uint8Array([76]));
+    await c.markPause(begin.callId, "pause", 1000);
+    await c.markPause(begin.callId, "resume", 1000);
+    const end = await c.endCall(begin.callId, 5000);
+    expect(end).toEqual({ ok: true, callId: begin.callId });
+    const files = (await readdir(join(recordings(), begin.callId))).sort();
+    expect(files).toEqual([`${begin.callId}.call.json`, `${begin.callId}.left.webm`, `${begin.callId}.right.webm`, `${begin.callId}.webm`]);
+    expect(states).toEqual(["starting", "recording", "paused", "recording", "stopping", "idle"]);
+  });
+
+  it("refuses a second start while recording (D-39)", async () => {
+    const c = make();
+    await c.init();
+    const first = await c.beginCall(MIC);
+    const second = await c.beginCall(MIC);
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(false);
+    if (!second.ok) expect(second.message).toMatch(/already recording/i);
+  });
+
+  it("refuses to record into OneDrive (T20)", async () => {
+    const c = make({ OneDrive: join(base, "Documents") });
+    await c.init();
+    const r = await c.beginCall(MIC);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.message).toMatch(/OneDrive/);
+    expect(c.guard.state).toBe("idle");
+    expect(c.settingsView().dirProblem).toMatch(/OneDrive/);
+  });
+
+  it("refuses chunks for a call that is not running, and wrong tracks", async () => {
+    const c = make();
+    await c.init();
+    const b = await c.beginCall(MIC);
+    if (!b.ok) throw new Error("start failed");
+    await expect(c.appendChunk("20200101-000000-ffffff", "stereo", new ArrayBuffer(1))).rejects.toThrow(/refused/);
+    await expect(c.appendChunk(b.callId, "centre", new ArrayBuffer(1))).rejects.toThrow(/refused/);
+    await expect(c.appendChunk(b.callId, "stereo", "text")).rejects.toThrow(/refused/);
+  });
+
+  it("keeps what was recorded when the recorder page crashes (R6)", async () => {
+    const c = make();
+    await c.init();
+    const b = await c.beginCall(MIC);
+    if (!b.ok) throw new Error("start failed");
+    await c.appendChunk(b.callId, "stereo", new Uint8Array([1, 2, 3]).buffer);
+    await c.recorderLost();
+    expect(c.guard.state).toBe("idle");
+    const meta = JSON.parse(await readFile(join(recordings(), b.callId, `${b.callId}.call.json`), "utf8"));
+    expect(meta.status).toBe("recovered");
+    expect(c.settingsView().notices[0]).toMatch(/Recovered 1 recording/);
+  });
+
+  it("recovers a crash leftover at startup and says so once", async () => {
+    const id = "20261029-140305-a1b2c3";
+    const dir = join(recordings(), ".in-progress", id);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, `${id}.webm.part`), "SSS");
+    const c = make();
+    await c.init();
+    expect(existsSync(join(recordings(), id, `${id}.webm`))).toBe(true);
+    expect(c.settingsView().notices).toHaveLength(1);
+    expect(c.settingsView().notices).toHaveLength(0);
+  });
+
+  it("does not let the folder change during a recording, and refuses OneDrive", async () => {
+    const c = make({ OneDrive: join(base, "OD") });
+    await c.init();
+    expect(await c.setRecordingsDir(join(base, "OD", "x"))).toMatch(/OneDrive/);
+    expect(await c.setRecordingsDir(join(base, "Calls"))).toBeNull();
+    expect(c.recordingsDir()).toBe(join(base, "Calls"));
+    await c.beginCall(MIC);
+    expect(await c.setRecordingsDir(join(base, "Other"))).toMatch(/after this recording stops/);
+  });
+});
