@@ -131,7 +131,7 @@ Windows must let desktop apps use the mic (*Settings → Privacy → Microphone*
 | `deepLinkFlow.ts` | `tacallrecorder://start…` → strict parse (a bad link: "This link can't start a recording", never logged) → refuse while recording (D-39) or with no Solace address (points to Settings) → **reuse the upload ticket already held for that session** (the browser opened the link twice) or check the ticket at the pinned address (step ①b) → only an "ok" records; every other answer is explained and nothing is recorded. |
 | `controller.ts` | A checked session is "armed"; the next Start records it under the **session id** (D-84) with the session in `<id>.call.json` (no ticket). Start from the button, tray or shortcut records a **local-only** call (D-82): transcribed, written to `.md` / `.json`, never sent; the window says "Local only — not linked to Solace". Every saved or crash-recovered call goes to the queue. |
 | `callJobs.ts` | `JobQueue` (`<app data>\queue.json`) + `QueueRunner` with core's `transcribeJob` / `sendJob`. Drains after each Stop (without delaying Stop), at start-up and at `nextWakeAt()` (a timer). **No Gemini key:** the call waits in "Recorded" with "Add a Gemini key in Settings to transcribe" and starts as soon as a key is saved. Sweep (D-140) at start-up and hourly, then forgets those jobs and tickets; jobs whose folder disappeared (the logon task) are dropped at start-up. |
-| `webm.ts`, `decoderClient.ts`, `decoderWindow.ts`, `renderer/decoder.ts`, `renderer/downsample.ts`, `pcmFiles.ts` | Decoding for transcription (controller decision): main reads the Opus packets out of `<id>.left.webm` / `.right.webm`; a hidden sandboxed page decodes them **10 s at a time** with WebCodecs and brings them to **16 kHz mono**; main appends them to `<id>.left.pcm` / `.right.pcm` (raw float32, written as `.part` then renamed) in the call folder, which core reads through `openPcm` as readers (fix round 1); the temp files are deleted once the transcript is written. A whole call is never held at 48 kHz. Checked on this laptop by `npm run selftest:audio` (4.98 s → 79,680 samples, same loudness as the file). Since fix round 1 no channel is ever read whole (see Fix round 1, I3). |
+| `webm.ts`, `decoderClient.ts`, `decoderWindow.ts`, `renderer/decoder.ts`, `renderer/downsample.ts`, `pcmFiles.ts` | Decoding for transcription (controller decision): main reads the Opus packets out of `<id>.left.webm` / `.right.webm`; a hidden sandboxed page decodes them **10 s at a time** with WebCodecs and brings them to **16 kHz mono**; main appends them to `<id>.left.s16` / `.right.s16` (raw 16-bit since fix round 3 — float32 `.pcm` before; written as `.part` then renamed) in the call folder, which core reads through `openPcm` as readers (fix round 1); the temp files are deleted once the transcript is written. A whole call is never held at 48 kHz. Checked on this laptop by `npm run selftest:audio` (4.98 s → 79,680 samples, same loudness as the file). Since fix round 1 no channel is ever read whole (see Fix round 1, I3). |
 | `sweepMode.ts`, `cleanupTask.ts`, `build/installer.nsh` | `TA Call Recorder.exe --sweep`: deletes expired calls headless and exits (reads the queue read-only; if the app is open, the open app sweeps instead). The installed app creates the Task Scheduler task **"TA Call Recorder cleanup"** for the current user on first run (and after an update): at this user's logon and daily, lowest rights, no admin. It is made from an XML definition because a plain `schtasks /SC ONLOGON` task triggers for any user and needs admin. The uninstaller deletes it (`customUnInstall`). Development builds create it only with `--register-cleanup-task`. Tests never run `schtasks`. |
 | `appLog.ts` | `<app data>\app.log` (256 KB, one old file kept): events with counts, stages, reason codes and call ids only. Tickets, keys, links, paths and any text become `[redacted]`. |
 | `callsView.ts`, `renderer/recentCalls.ts` | **Recent calls**: date and time, length, linked or local only, stage (Recorded / Transcribing / Transcribed / Sending / Sent / Failed + the reason in plain words), Retry on failed calls, Open folder, Open transcript (the `.md`). No candidate names. |
@@ -176,6 +176,22 @@ wizard); `npm run selftest:audio` (also decodes the left file the way transcript
 - **Contract lock:** a test runs an app-built payload through Solace's own `validateTranscriptUpload`
   (read-only import from the Solace worktree; skipped where that worktree is absent).
 
+### Fix round 3 (APP review 2, 29/10/2026)
+- **When the uninstall purge runs (I-R1):** no longer when the uninstaller opens. It runs inside the uninstall
+  section (`customRemoveFiles`), after the TA confirmed on the uninstaller's pages and after electron-builder's
+  "app is running" check, then electron-builder's own file removal runs unchanged. Cancel deletes nothing.
+- **Only on a real uninstall (m-R3):** an update runs the old uninstaller with `/S /KEEP_APP_DATA` plus
+  `--updated` or `--delete-app-data`; the purge and the task removal run only when neither `--updated` nor
+  `/KEEP_APP_DATA` is there, so an update started with `--delete-app-data` keeps the recordings. (That flag
+  still makes electron-builder delete the app-data folder on such an update — its own documented behaviour.)
+  A *silent* real uninstall (`/S`, e.g. by IT) skips electron-builder's app-running check; close the app first.
+- **"[không nghe rõ]" is not content (m-R1):** the placeholder turn is still sent, but never makes `has_content`
+  true.
+- **16-bit temp PCM (m-R4):** half the disk of float32 (about 0.46 GB per channel for a 4-hour call).
+- **A start or link during `--sweep` (m-R5):** the sweeping process remembers it and, when done (seconds), starts
+  the app with that request's own arguments, a Solace link included. Nothing is lost or logged.
+- Upload tickets saved by builds before fix round 1 stay unusable (development builds only; controller decision).
+
 Follow-ups: shortcuts are fixed (make them configurable later); the silence-warning thresholds are to be tuned
 after real calls.
 
@@ -217,7 +233,9 @@ it; add `--dev` only to test against a Solace on `http://localhost`.
    are deleted. Change the recordings folder once, then check calls in the **old** folder are also deleted
    after 3 days. Delete the task by hand in Task Scheduler and restart the app → it is back. **Uninstall** →
    the recordings in every folder used, the settings, the Gemini key and the task are gone (an **update** keeps
-   all of them). Settings → Change… to a disconnected network drive letter → "Pick a folder on this laptop." A folder
+   all of them). **Open the uninstaller and press Cancel on its first page → nothing is deleted** (recordings,
+   key, settings and task all still there). Start the uninstaller while the app is recording → it asks to close
+   the app before anything is deleted. Settings → Change… to a disconnected network drive letter → "Pick a folder on this laptop." A folder
    inside OneDrive is refused. Check the installed exe starts normally (the fuses are set at packaging).
 
 ## Tests the owner runs by hand (they need a real call / real audio)
