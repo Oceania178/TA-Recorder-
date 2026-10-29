@@ -241,3 +241,8 @@ it; add `--dev` only to test against a Solace on `http://localhost`.
 ## Tests the owner runs by hand (they need a real call / real audio)
 T1, T2, T3, T4, T5, T10, T14 (Step 0); R1–R7; T6, T7, T8, T9, T20, T22, T37 (with role-play calls and the
 real Gemini key, after Legal for real candidates).
+
+## Installer build (controller, 29/10/2026)
+- `npm run dist:win` (unsigned, `CSC_IDENTITY_AUTO_DISCOVERY=false`) → `release\TA Call Recorder Setup 0.1.0.exe` (81.8 MB, NSIS, per-user, choose folder). The custom uninstall macros compiled.
+- First run of electron-builder failed on Windows symlinks inside its `winCodeSign` archive ("A required privilege is not held"); fixed the same way Solace's `desktop/build-win.ps1` does: extract the archive into `%LOCALAPPDATA%\electron-builder\Cache\winCodeSign\winCodeSign-2.6.0` without its `darwin` folder, then build again. No admin, no Developer Mode.
+- The packaged exe (fuses set, `app.asar` only) passes `--smoke`, `--smoke-capture` (real mic + loopback: three files decode at 4.98 s, silent right channel keeps time, transcription decode at 16 kHz) and `--smoke-crash` (recovered). Not installed on this laptop by the controller: installing, the uninstall Cancel test, the task, T14 and every hand test in this plan are Triet's.
