@@ -23,8 +23,8 @@ Electron / electron-builder approved 29/10/2026.
 | --- | --- | --- |
 | 0 | Scaffold; recorder: start/stop/pause, timer, stereo + left + right Opus files, meters, mic-processing switch, crash-safe chunks; unsigned NSIS installer (T14) | recorder built and tested (APP-A, 29/10/2026 — see "Recorder"); `npm run selftest:audio` passes on Triet's laptop (real mic + loopback, 3 files decode, silent loopback keeps time, crash keeps the call). Installer not built yet (controller, last). T1–T5, T10, T14 by hand |
 | 1 | Runs in the background: tray, floating bar, global shortcuts start/pause/stop, one session at a time (D-39), device check and warning (R4, D-42 where Windows allows), no lost file on error (R6) | built (APP-A, 29/10/2026). D-42 "which app is playing" is **not possible** from Electron without native code: the app shows the recorded output device and warns on a silent channel instead. R1–R7 by hand |
-| 2 | Transcription on the laptop: VAD per channel (option B, D-15), queue on disk that resumes after restart, Gemini inline per segment with retries, transcript `.md` + `.json`, send to Solace (ticket check before recording, upload ticket, resend = same call, D-85), 3-day permanent delete + OneDrive refusal (D-140, T20), Gemini key in safeStorage (D-141) | core built and unit-tested (APP-B, 29/10/2026 — see "Core modules"); wiring into Electron main (decode, safeStorage, timers, Task Scheduler) is APP-C; T6–T9, T20, T22, T37 by hand |
-| 5 (app part) | Opened by Solace's deep link with the ticket checked before recording (D-143, D-144, D-147); `self_dial` (D-133); recording without a session stays local and is never sent (D-82) | todo |
+| 2 | Transcription on the laptop: VAD per channel (option B, D-15), queue on disk that resumes after restart, Gemini inline per segment with retries, transcript `.md` + `.json`, send to Solace (ticket check before recording, upload ticket, resend = same call, D-85), 3-day permanent delete + OneDrive refusal (D-140, T20), Gemini key in safeStorage (D-141) | built (core APP-B, wiring APP-C, 29/10/2026 — see "Core modules" and "Integration"): queue after every Stop, chunked 16 kHz decode in a hidden page, Gemini key in safeStorage, timers, 3-day sweep hourly + a per-user logon/daily Task Scheduler task + `--sweep` mode, Recent calls. T6–T9, T20, T22, T37 by hand |
+| 5 (app part) | Opened by Solace's deep link with the ticket checked before recording (D-143, D-144, D-147); `self_dial` (D-133); recording without a session stays local and is never sent (D-82) | built (APP-C, 29/10/2026 — see "Integration"); settings + first-run set-up check (D-132). End-to-end with Solace's "Call & record" by hand (below) |
 
 ## Core modules (`src/core/`, APP-B, 29/10/2026)
 Pure TypeScript: no Electron import; `fetch`, clock, sleep and storage are passed in, so every module is
@@ -44,7 +44,7 @@ tested without network, Gemini or Solace (164 tests in `tests/core/`). Import ev
 | `retention.ts` | Deletes call folders 72 h after the call ended, permanently with `fs.rm` (D-140); only folders with the app's marker file whose id matches the folder name; never follows links; counts-only report. **Decision:** deleted at 3 days whatever the job's stage (the 72 h send window has closed by then anyway), but never while the job is being transcribed or sent — the next sweep takes it. A recording with no end time (crash) is judged by its newest file. |
 | `pipeline.ts` | `transcribeJob`: decoded left + right PCM → VAD → WAV → Gemini → transcript files, with a checkpoint (`<id>.progress.json` in the call folder) so a restart never pays twice for the same audio; a blocked segment becomes empty text. `sendJob`: reads the `.transcript.json`, uploads it, maps Solace's answer to a queue outcome. End-to-end test with a fake Gemini and a fake Solace. |
 
-Wiring (APP-C): call folder = `<recordings>\<call id>\` with `writeCallMarker` at Start and again at Stop
+Wiring (planned by APP-B, built by APP-C — see "Integration"): call folder = `<recordings>\<call id>\` with `writeCallMarker` at Start and again at Stop
 (with the end time) — already done by the recorder (`CallWriter`, crash recovery); `JobQueue.open(<appData>\queue.json)`; a `QueueRunner` whose `transcribe` /
 `send` are `transcribeJob` / `sendJob`; `drain()` after each Stop, at start-up and at `nextWakeAt()`;
 `sweepRecordings` at start-up and periodically, then `queue.forget(deletedIds)`. Job times are ISO with
@@ -121,6 +121,59 @@ Windows must let desktop apps use the mic (*Settings → Privacy → Microphone*
 10. **T20 (folder part):** *Settings → Change…* → pick a folder inside OneDrive → refused.
 11. **P6:** record twice, Mic processing off and on; compare your voice in the left files.
 12. **R7:** watch CPU and memory of *TA Call Recorder* in Task Manager during a call; note the numbers.
+
+## Integration (`src/main/` + `src/renderer/`, APP-C, 29/10/2026)
+| Piece | What it does |
+| --- | --- |
+| `appSettings.ts` | `settings.json` in the app data folder: recordings folder, mic processing, **pinned Solace address**, Gemini model (empty = default), when the notice was accepted / the wizard finished, which program the cleanup task was made for. Only these fields are ever written, so a key or ticket can never land there. Default folder: `Documents\Sound Recordings\TA Call Recorder`, or `%LOCALAPPDATA%\TA Call Recorder\Recordings` when Documents is inside OneDrive. |
+| `secretStore.ts` | Gemini key and upload tickets, encrypted with Electron `safeStorage` (Windows DPAPI, this Windows user only) under `<app data>\secrets\`. The key is shown back only as `•••• last4`. One ticket per Solace session, with its send-by time; forgotten once sent, refused for good, or expired. Without Windows encryption: the key is refused, tickets stay in memory. |
+| `settingsActions.ts` | Solace address: https origin only (`http://localhost` only in a development build started with `--dev`); model id check; key save / remove (calls waiting for a key start at once). |
+| `deepLinkFlow.ts` | `tacallrecorder://start…` → strict parse (a bad link: "This link can't start a recording", never logged) → refuse while recording (D-39) or with no Solace address (points to Settings) → **reuse the upload ticket already held for that session** (the browser opened the link twice) or check the ticket at the pinned address (step ①b) → only an "ok" records; every other answer is explained and nothing is recorded. |
+| `controller.ts` | A checked session is "armed"; the next Start records it under the **session id** (D-84) with the session in `<id>.call.json` (no ticket). Start from the button, tray or shortcut records a **local-only** call (D-82): transcribed, written to `.md` / `.json`, never sent; the window says "Local only — not linked to Solace". Every saved or crash-recovered call goes to the queue. |
+| `callJobs.ts` | `JobQueue` (`<app data>\queue.json`) + `QueueRunner` with core's `transcribeJob` / `sendJob`. Drains after each Stop (without delaying Stop), at start-up and at `nextWakeAt()` (a timer). **No Gemini key:** the call waits in "Recorded" with "Add a Gemini key in Settings to transcribe" and starts as soon as a key is saved. Sweep (D-140) at start-up and hourly, then forgets those jobs and tickets; jobs whose folder disappeared (the logon task) are dropped at start-up. |
+| `webm.ts`, `decoderClient.ts`, `decoderWindow.ts`, `renderer/decoder.ts`, `renderer/downsample.ts`, `pcmFiles.ts` | Decoding for transcription (controller decision): main reads the Opus packets out of `<id>.left.webm` / `.right.webm`; a hidden sandboxed page decodes them **10 s at a time** with WebCodecs and brings them to **16 kHz mono**; main appends them to `<id>.left.pcm` / `.right.pcm` (raw float32, written as `.part` then renamed) in the call folder, which core's `loadPcm` reads; the temp files are deleted once the transcript is written. A whole call is never held at 48 kHz. Checked on this laptop by `npm run selftest:audio` (4.98 s → 79,680 samples, same loudness as the file). Memory note: core still takes each channel whole at 16 kHz (≈ 230 MB per channel for 60 min). |
+| `sweepMode.ts`, `cleanupTask.ts`, `build/installer.nsh` | `TA Call Recorder.exe --sweep`: deletes expired calls headless and exits (reads the queue read-only; if the app is open, the open app sweeps instead). The installed app creates the Task Scheduler task **"TA Call Recorder cleanup"** for the current user on first run (and after an update): at this user's logon and daily, lowest rights, no admin. It is made from an XML definition because a plain `schtasks /SC ONLOGON` task triggers for any user and needs admin. The uninstaller deletes it (`customUnInstall`). Development builds create it only with `--register-cleanup-task`. Tests never run `schtasks`. |
+| `appLog.ts` | `<app data>\app.log` (256 KB, one old file kept): events with counts, stages, reason codes and call ids only. Tickets, keys, links, paths and any text become `[redacted]`. |
+| `callsView.ts`, `renderer/recentCalls.ts` | **Recent calls**: date and time, length, linked or local only, stage (Recorded / Transcribing / Transcribed / Sending / Sent / Failed + the reason in plain words), Retry on failed calls, Open folder, Open transcript (the `.md`). No candidate names. |
+| `wizardChecks.ts`, `renderer/wizard.ts`, `renderer/soundCheck.ts`, `renderer/settingsPanel.ts` | Settings panel and the **set-up check** (D-132), shown at the first start until finished, again from the tray ("Set-up check…") or Settings: 1 notice + "Use with role-play calls only until Legal approves real candidates." → "I understand"; 2 mic (opens `ms-settings:privacy-microphone` when blocked); 3 both meters move (a beep plays on the default output so the right meter moves); 4 Solace address, tested with Solace's public, content-free `GET /api/health` (no ticket is ever sent; "Call & record" is the real test); 5 3CX test dial to a number the TA types (skippable). Each step shows "Pass" / "Not yet" with the fix. |
+
+Checks a developer runs: `npm test`; `npm run smoke` (also asks the page for settings, Recent calls and the
+wizard); `npm run selftest:audio` (also decodes the left file the way transcription does).
+
+Follow-ups: shortcuts are fixed (make them configurable later); the silence-warning thresholds are to be tuned
+after real calls; Solace's `server_time` is not used to correct the laptop clock.
+
+## How Triet tests Step 2 / Step 5
+Role-play calls only (D-126). Start with `npm start` (or the installed app, after the controller builds it).
+A development checkout needs `npm run build && npx electron . --register-protocol` once so Solace's link opens
+it; add `--dev` only to test against a Solace on `http://localhost`.
+1. **First start:** the set-up check opens. Step 1 → "I understand". Step 2 → Pass. Step 3 → Start, talk,
+   Play beep → both bars move → Pass. Step 4 → enter Solace's address → "Solace answered" (or the
+   https-only message). Step 5 → type your desk number → Test dial → 3CX opens with it → "Yes" (or skip).
+   Finish.
+2. **Settings:** paste the Gemini key → "Saved: •••• last4". Quit and reopen: still there, never in full.
+   `%APPDATA%\ta-call-recorder\settings.json` and `app.log` must not contain the key.
+3. **Local-only call (T6–T9 with a role-play):** Ctrl+Alt+R, talk ~2 min with a colleague, stop. The window
+   says "Local only — not linked to Solace". Recent calls: Recorded → Transcribing → Transcribed, "Local only".
+   *Open transcript* shows the turns (you = TA, colleague = candidate). Nothing reaches Solace.
+4. **No key:** remove the key, record 30 s → the call stays "Recorded" with "Add a Gemini key in Settings to
+   transcribe". Save the key → it is transcribed right away.
+5. **Linked call (Step 5):** Solace must have `APP_BASE_URL` set to the same address as step 4. In Solace,
+   press "Call & record" on a role-play candidate at phone screen → the browser asks to open TA Call
+   Recorder → allow → recording starts and the window says "Linked to Solace". Talk, stop → Recent calls goes
+   to **Sent**; the transcript appears in Solace's "Paste your notes". Repeat with "Record only, I dial"
+   (`self_dial`): the window says to dial yourself.
+6. **Refusals:** open the same Solace link again after the call → "already been recorded". Open a link more
+   than 30 minutes after pressing the button → "Solace did not accept this link… Nothing was recorded."
+   Press "Call & record" during a recording → "Already recording a call". Clear the Solace address → a link
+   says to set it in Settings.
+7. **Offline (T22):** Wi-Fi off after a linked call → "Waiting to try again"; Wi-Fi on → it is sent (the timer
+   retries; a resend never makes a duplicate, D-85).
+8. **T20 / D-140:** the network log shows only the transcript JSON going to Solace. After 3 days (or with the
+   laptop clock moved forward) the call's folder is gone, not in the Recycle Bin, and the call leaves Recent
+   calls. With the **installed** app: Task Scheduler shows "TA Call Recorder cleanup" under your user (at log
+   on + daily) — check it was created **without** an admin prompt; quit the app, log off and on → old calls
+   are deleted. Uninstall → the task is gone. A folder inside OneDrive is refused.
 
 ## Tests the owner runs by hand (they need a real call / real audio)
 T1, T2, T3, T4, T5, T10, T14 (Step 0); R1–R7; T6, T7, T8, T9, T20, T22, T37 (with role-play calls and the
