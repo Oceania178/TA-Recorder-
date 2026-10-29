@@ -7,8 +7,10 @@ await build({ ...common, entryPoints: ["src/main/main.ts"], outfile: "dist/main/
 if (existsSync("src/main/preload.ts")) {
   await build({ ...common, entryPoints: ["src/main/preload.ts"], outfile: "dist/main/preload.js", platform: "node", format: "cjs", external: ["electron"] });
 }
-if (existsSync("src/renderer/recorder.ts")) {
-  await build({ ...common, entryPoints: ["src/renderer/recorder.ts"], outfile: "dist/renderer/recorder.js", platform: "browser", format: "iife" });
+for (const page of ["recorder", "bar"]) {
+  if (existsSync(`src/renderer/${page}.ts`)) {
+    await build({ ...common, entryPoints: [`src/renderer/${page}.ts`], outfile: `dist/renderer/${page}.js`, platform: "browser", format: "iife" });
+  }
 }
 mkdirSync("dist/renderer", { recursive: true });
 if (existsSync("src/renderer/static")) cpSync("src/renderer/static", "dist/renderer", { recursive: true });

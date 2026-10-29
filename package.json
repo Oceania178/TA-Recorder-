@@ -10,6 +10,8 @@
     "start": "npm run build && electron .",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "smoke": "npm run build && electron . --smoke",
+    "selftest:audio": "npm run build && electron . --smoke --smoke-capture --smoke-crash",
     "dist:win": "npm run build && electron-builder --win nsis"
   },
   "build": {
