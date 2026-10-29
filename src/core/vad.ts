@@ -48,19 +48,48 @@ const FLOOR_MIN_DB = -90;
 const FLOOR_FALL = 0.3;
 const FLOOR_RISE = 0.01;
 
+/** Reads samples [start, start + count) of one channel (fewer at the end). Lets the VAD run over a file. */
+export interface PcmReader {
+  length: number;
+  read(start: number, count: number): Promise<Float32Array>;
+}
+
+/**
+ * Per-frame loudness in dBFS, fed a chunk at a time (I3: a long call is never held whole). A frame that
+ * straddles two chunks is finished with the next one, so the result is the same whatever the chunk size.
+ */
+export class FrameMeter {
+  private levels: number[] = [];
+  private sum = 0;
+  private filled = 0;
+
+  constructor(private readonly frameLen: number) {}
+
+  push(chunk: Float32Array): void {
+    for (let i = 0; i < chunk.length; i++) {
+      this.sum += chunk[i] * chunk[i];
+      if (++this.filled === this.frameLen) this.closeFrame();
+    }
+  }
+
+  private closeFrame(): void {
+    const rms = Math.sqrt(this.sum / Math.max(1, this.filled));
+    this.levels.push(20 * Math.log10(rms + 1e-10));
+    this.sum = 0;
+    this.filled = 0;
+  }
+
+  finish(): Float64Array {
+    if (this.filled > 0) this.closeFrame();
+    return Float64Array.from(this.levels);
+  }
+}
+
 /** Per-frame loudness in dBFS. */
 function frameLevels(pcm: Float32Array, frameLen: number): Float64Array {
-  const n = Math.ceil(pcm.length / frameLen);
-  const out = new Float64Array(n);
-  for (let f = 0; f < n; f++) {
-    const a = f * frameLen;
-    const b = Math.min(pcm.length, a + frameLen);
-    let sum = 0;
-    for (let i = a; i < b; i++) sum += pcm[i] * pcm[i];
-    const rms = Math.sqrt(sum / Math.max(1, b - a));
-    out[f] = 20 * Math.log10(rms + 1e-10);
-  }
-  return out;
+  const m = new FrameMeter(frameLen);
+  m.push(pcm);
+  return m.finish();
 }
 
 function percentile(values: Float64Array, p: number): number {
@@ -70,14 +99,35 @@ function percentile(values: Float64Array, p: number): number {
 
 interface Region { start: number; end: number; voicedMs: number }
 
-export function detectSpeech(pcm: Float32Array, sampleRate: number, options: Partial<VadOptions> = {}): SpeechSegment[] {
+function frameGeometry(sampleRate: number, o: VadOptions): { frameLen: number; frameMs: number } {
   if (!Number.isFinite(sampleRate) || sampleRate <= 0) throw new RangeError("sampleRate must be a positive number");
-  const o = { ...DEFAULT_VAD, ...options };
-  if (pcm.length === 0) return [];
-  const durationMs = (pcm.length / sampleRate) * 1000;
   const frameLen = Math.max(1, Math.round((o.frameMs / 1000) * sampleRate));
-  const frameMs = (frameLen / sampleRate) * 1000;
-  const levels = frameLevels(pcm, frameLen);
+  return { frameLen, frameMs: (frameLen / sampleRate) * 1000 };
+}
+
+export function detectSpeech(pcm: Float32Array, sampleRate: number, options: Partial<VadOptions> = {}): SpeechSegment[] {
+  const o = { ...DEFAULT_VAD, ...options };
+  const { frameLen, frameMs } = frameGeometry(sampleRate, o);
+  if (pcm.length === 0) return [];
+  return segmentsFromLevels(frameLevels(pcm, frameLen), frameMs, (pcm.length / sampleRate) * 1000, o);
+}
+
+/** The same as detectSpeech, reading the channel `chunkSamples` at a time (default 10 s at 16 kHz). */
+export async function detectSpeechStream(
+  reader: PcmReader, sampleRate: number, options: Partial<VadOptions> = {}, chunkSamples = 160_000,
+): Promise<SpeechSegment[]> {
+  const o = { ...DEFAULT_VAD, ...options };
+  const { frameLen, frameMs } = frameGeometry(sampleRate, o);
+  if (reader.length <= 0) return [];
+  const meter = new FrameMeter(frameLen);
+  const step = Math.max(1, Math.floor(chunkSamples));
+  for (let start = 0; start < reader.length; start += step) {
+    meter.push(await reader.read(start, Math.min(step, reader.length - start)));
+  }
+  return segmentsFromLevels(meter.finish(), frameMs, (reader.length / sampleRate) * 1000, o);
+}
+
+function segmentsFromLevels(levels: Float64Array, frameMs: number, durationMs: number, o: VadOptions): SpeechSegment[] {
 
   // 1–3: classify frames against an adaptive floor, with hangover.
   const clampFloor = (x: number) => Math.min(o.maxFloorDb, Math.max(FLOOR_MIN_DB, x));

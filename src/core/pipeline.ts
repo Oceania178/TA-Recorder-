@@ -16,10 +16,11 @@ import path from "node:path";
 import { writeFileAtomic } from "./atomicWrite";
 import { transcribeSegment, type GeminiDeps } from "./gemini";
 import type { FailureReason, Job, SendOutcome, StepOutcome } from "./queue";
+import { solaceLimitProblems } from "./limits";
 import { uploadTranscript, type SolaceDeps } from "./solaceClient";
 import { assembleTurns, buildTranscriptFile, readTranscriptFile, toPayload, writeTranscriptFiles, type ChannelText } from "./transcript";
-import { detectSpeech, type VadOptions } from "./vad";
-import { encodeWav, slicePcm } from "./wav";
+import { detectSpeechStream, type PcmReader, type VadOptions } from "./vad";
+import { encodeWav } from "./wav";
 
 export interface DecodedCall {
   /** The TA's mic. */
@@ -29,9 +30,36 @@ export interface DecodedCall {
   sampleRate: number;
 }
 
+/**
+ * The decoded call as readers (APP review I3): the VAD reads each channel 10 s at a time and each segment
+ * reads only its own samples, so a long call is never held in memory whole.
+ */
+export interface PcmSource {
+  sampleRate: number;
+  left: PcmReader;
+  right: PcmReader;
+  close?(): Promise<void>;
+}
+
+/** Text of a segment Gemini could not handle (a 400 on that segment only, APP review M6). */
+export const UNCLEAR_SEGMENT_TEXT = "[không nghe rõ]";
+/** How much the VAD reads at once. */
+const VAD_CHUNK_SECONDS = 10;
+
+/** An in-memory call as a PcmSource (tests, short calls). */
+export function memorySource(c: DecodedCall): PcmSource {
+  const reader = (pcm: Float32Array): PcmReader => ({
+    length: pcm.length,
+    read: async (start, count) => pcm.subarray(Math.max(0, start), Math.min(pcm.length, start + count)),
+  });
+  return { sampleRate: c.sampleRate, left: reader(c.left), right: reader(c.right) };
+}
+
 export interface PipelineDeps {
-  /** Decode the call's left-only and right-only files (renderer / OfflineAudioContext); null if missing. */
-  loadPcm(job: Job): Promise<DecodedCall | null>;
+  /** Open the call's decoded left and right channels as readers; null if the audio is missing. */
+  openPcm?(job: Job): Promise<PcmSource | null>;
+  /** The whole call in memory (older form, kept for short calls and tests); used when openPcm is absent. */
+  loadPcm?(job: Job): Promise<DecodedCall | null>;
   /** From safeStorage, at the moment of use; never stored by the core (D-141). */
   getGeminiKey(): Promise<string | null>;
   getModel(): string;
@@ -77,22 +105,41 @@ export function isoOffsetMinutes(iso: string): number {
 
 const final = (reason: FailureReason): StepOutcome => ({ ok: false, retryable: false, reason });
 
+async function openSource(deps: PipelineDeps, job: Job): Promise<PcmSource | null> {
+  if (deps.openPcm) return deps.openPcm(job);
+  const pcm = deps.loadPcm ? await deps.loadPcm(job) : null;
+  return pcm ? memorySource(pcm) : null;
+}
+
 export async function transcribeJob(deps: PipelineDeps, job: Job): Promise<StepOutcome> {
   const apiKey = await deps.getGeminiKey();
   if (!apiKey || !apiKey.trim()) return final("no_gemini_key");
-  const pcm = await deps.loadPcm(job);
-  if (!pcm) return final("audio_missing");
+  const source = await openSource(deps, job);
+  if (!source) return final("audio_missing");
+  try {
+    return await transcribeSource(deps, job, apiKey, source);
+  } finally {
+    await source.close?.().catch(() => undefined);
+  }
+}
 
+async function transcribeSource(deps: PipelineDeps, job: Job, apiKey: string, source: PcmSource): Promise<StepOutcome> {
   const model = deps.getModel();
   const checkpoint = await loadCheckpoint(job, model);
   const texts: Record<Channel, ChannelText[]> = { L: [], R: [] };
+  const sr = source.sampleRate;
+  let segments = 0;
+  let unclear = 0;
 
   for (const ch of ["L", "R"] as const) {
-    const signal = ch === "L" ? pcm.left : pcm.right;
-    for (const seg of detectSpeech(signal, pcm.sampleRate, deps.vad)) {
+    const reader = ch === "L" ? source.left : source.right;
+    for (const seg of await detectSpeechStream(reader, sr, deps.vad, Math.round(sr * VAD_CHUNK_SECONDS))) {
+      segments++;
       const key = `${ch}:${seg.start_ms}-${seg.end_ms}`;
       if (!(key in checkpoint.done)) {
-        const wav = encodeWav(slicePcm(signal, pcm.sampleRate, seg.start_ms, seg.end_ms), pcm.sampleRate);
+        const a = Math.max(0, Math.min(reader.length, Math.round((seg.start_ms / 1000) * sr)));
+        const b = Math.max(a, Math.min(reader.length, Math.round((seg.end_ms / 1000) * sr)));
+        const wav = encodeWav(await reader.read(a, b - a), sr);
         const r = await transcribeSegment(deps.gemini, { apiKey, model, wav });
         if (r.ok) {
           checkpoint.done[key] = r.text;
@@ -109,13 +156,18 @@ export async function transcribeJob(deps: PipelineDeps, job: Job): Promise<StepO
         } else if (r.kind === "model_not_found" || r.kind === "bad_model") {
           return final("gemini_model_not_found");
         } else {
-          return final("gemini_bad_request");
+          // A 400 for this one segment (M6): mark it and go on. Not checkpointed, so a retry asks again.
+          unclear++;
+          texts[ch].push({ start_ms: seg.start_ms, end_ms: seg.end_ms, text: UNCLEAR_SEGMENT_TEXT });
+          continue;
         }
         await writeFileAtomic(progressPath(job), JSON.stringify(checkpoint));
       }
       texts[ch].push({ start_ms: seg.start_ms, end_ms: seg.end_ms, text: checkpoint.done[key] });
     }
   }
+  // Most segments refused: something is wrong with the call or the request, not with one odd stretch.
+  if (unclear > 0 && unclear * 2 > segments) return final("gemini_bad_request");
 
   const file = buildTranscriptFile({
     sessionId: job.sessionId,
@@ -139,6 +191,9 @@ export async function sendJob(deps: SendDeps, job: Job, uploadTicket: string): P
   if (!file) return { ok: false, retryable: false, reason: "transcript_missing" };
   const payload = toPayload(file);
   if (!payload || payload.session_id !== job.sessionId) return { ok: false, retryable: false, reason: "app_bug" };
+  // Solace refuses an upload over its caps for good (M5): say so here instead of sending it.
+  const over = solaceLimitProblems(payload);
+  if (over.length) return { ok: false, retryable: false, reason: "transcript_over_limits", details: over };
 
   const r = await uploadTranscript(deps.solace, baseUrl, uploadTicket, payload);
   if (r.ok) return { ok: true, callId: r.callId, duplicate: r.duplicate };

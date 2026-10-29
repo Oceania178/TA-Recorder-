@@ -26,7 +26,7 @@ export type Stage = "recorded" | "transcribing" | "transcribed" | "sending" | "s
 export type FailureReason =
   | "no_gemini_key" | "gemini_key_rejected" | "gemini_model_not_found" | "gemini_bad_request" | "audio_missing"
   | "no_solace_address" | "upload_ticket_missing" | "upload_window_closed" | "transcript_missing"
-  | "solace_refused" | "solace_invalid" | "solace_different_content" | "transcript_too_large" | "app_bug"
+  | "solace_refused" | "solace_invalid" | "solace_different_content" | "transcript_too_large" | "transcript_over_limits" | "app_bug"
   | "unexpected_error";
 
 export interface Failure {
@@ -146,7 +146,8 @@ export class JobQueue {
 
   async fail(id: string, reason: FailureReason, details?: string[]): Promise<void> {
     const j = this.#must(id);
-    const back = j.stage === "transcribed" || j.stage === "sending" ? "transcribed" : "recorded";
+    // A missing transcript can only be fixed by transcribing again (APP review M1).
+    const back = reason !== "transcript_missing" && (j.stage === "transcribed" || j.stage === "sending") ? "transcribed" : "recorded";
     const failure: Failure = { reason, at: this.#iso(), stage: back, ...(details?.length ? { details } : {}) };
     await this.#patch(id, { stage: "failed", nextAttemptAt: null, failure });
   }
