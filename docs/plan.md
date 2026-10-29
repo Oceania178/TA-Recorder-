@@ -149,7 +149,10 @@ wizard); `npm run selftest:audio` (also decodes the left file the way transcript
   deleted 3 days after their newest file (never the call being recorded). `--sweep` holds the single-instance
   lock, so a stale "transcribing" stage cannot block it. A **real uninstall** (not an update) runs
   `--uninstall-purge` first: every call folder with the app's marker, in every known folder, whatever its age,
-  plus the upload tickets. The notice says "Uninstalling deletes your recordings."
+  plus the upload tickets — and, since fix round 2, the app's data in `userData` (settings, queue, log, the
+  secret store with the Gemini key); electron-builder then removes the app-data folder
+  (`nsis.deleteAppDataOnUninstall`), also only on a real uninstall. The notice says "Uninstalling deletes your
+  recordings and the app's settings, including your Gemini key."
 - **Long calls (I3):** the VAD reads each channel's temp PCM file 10 s at a time and each segment reads only its
   own samples (`openPcm`, `detectSpeechStream`), so memory stays small for any length (tested with a synthetic
   4-hour call: no read over ~31 s of audio). Recordings stop and are saved at **4 h**, with a warning at 3 h 50.
@@ -158,7 +161,8 @@ wizard); `npm run selftest:audio` (also decodes the left file the way transcript
   (sha256, M3); an armed Solace session only attaches to the start its link pressed (`startLinked`, M4);
   Solace's caps (5,000 turns, 300,000 characters) are checked before sending — `transcript_over_limits` (M5);
   a Gemini 400 on one segment writes "[không nghe rõ]" there and goes on, the call fails only when most
-  segments fail (M6); UNC paths and mapped network drives are refused as recordings folder (M7); the cleanup
+  segments fail (M6); UNC paths, mapped network drives and (fix round 2) drive letters that are not connected are refused as
+  recordings folder — "Pick a folder on this laptop." (M7); the cleanup
   task is re-created at start-up when missing (`schtasks /Query`) and kept during an update (M8); an unplugged
   recordings folder keeps its jobs and tickets (M9); pages load only the app's own files (M10); the mic
   permission never includes a camera — getDisplayMedia arrives as "media" with no types (checked on this
@@ -212,7 +216,8 @@ it; add `--dev` only to test against a Solace on `http://localhost`.
    on + daily) — check it was created **without** an admin prompt; quit the app, log off and on → old calls
    are deleted. Change the recordings folder once, then check calls in the **old** folder are also deleted
    after 3 days. Delete the task by hand in Task Scheduler and restart the app → it is back. **Uninstall** →
-   the recordings in every folder used are gone and the task is gone (an **update** keeps both). A folder
+   the recordings in every folder used, the settings, the Gemini key and the task are gone (an **update** keeps
+   all of them). Settings → Change… to a disconnected network drive letter → "Pick a folder on this laptop." A folder
    inside OneDrive is refused. Check the installed exe starts normally (the fuses are set at packaging).
 
 ## Tests the owner runs by hand (they need a real call / real audio)
