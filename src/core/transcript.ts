@@ -18,6 +18,9 @@ import { isDialMode, type DialMode, type TranscriptPayload, type Turn } from "./
  */
 export const HAS_CONTENT_MIN_CANDIDATE_TURNS = 1;
 
+/** Text of a segment Gemini could not handle (APP review M6). Sent as a turn, but never counts as content. */
+export const UNCLEAR_SEGMENT_TEXT = "[không nghe rõ]";
+
 /** A transcribed stretch of one channel. */
 export interface ChannelText {
   start_ms: number;
@@ -76,7 +79,9 @@ export function assembleTurns(left: ChannelText[], right: ChannelText[]): Turn[]
 }
 
 export function hasContent(turns: Turn[]): boolean {
-  return turns.filter((t) => t.speaker === "candidate" && t.text.trim() !== "").length >= HAS_CONTENT_MIN_CANDIDATE_TURNS;
+  // The placeholder for a segment Gemini could not handle is not the candidate speaking (APP review 2, m-R1).
+  const words = (t: Turn) => t.text.trim() !== "" && t.text.trim() !== UNCLEAR_SEGMENT_TEXT;
+  return turns.filter((t) => t.speaker === "candidate" && words(t)).length >= HAS_CONTENT_MIN_CANDIDATE_TURNS;
 }
 
 const pad2 = (n: number) => String(n).padStart(2, "0");

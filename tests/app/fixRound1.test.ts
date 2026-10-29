@@ -283,10 +283,7 @@ describe("I2c: uninstalling deletes the recordings", () => {
   });
 
   it("the uninstaller runs the purge on a real uninstall only (not on an update), and the notice says so", async () => {
-    const nsh = await readFile(join(__dirname, "..", "..", "build", "installer.nsh"), "utf8");
-    expect(nsh).toContain("!macro customUnInit");
-    expect(nsh).toContain('"--updated"');
-    expect(nsh).toContain("--uninstall-purge");
+    // Where and when the uninstaller runs the purge is pinned in fixRound3.test.ts (I-R1).
     const html = await readFile(join(__dirname, "..", "..", "src", "renderer", "static", "recorder.html"), "utf8");
     expect(html).toContain("Uninstalling deletes your recordings and the app's settings, including your Gemini key.");
   });
@@ -384,8 +381,7 @@ describe("M8: the cleanup task is re-created when it is missing", () => {
 
   it("the uninstaller keeps the task during an update", async () => {
     const nsh = await readFile(join(__dirname, "..", "..", "build", "installer.nsh"), "utf8");
-    const unInstall = nsh.slice(nsh.indexOf("!macro customUnInstall"));
-    expect(unInstall).toContain("--updated");
+    expect(nsh.slice(nsh.indexOf("!macro customUnInstall"))).toContain("!insertmacro taRealUninstall");
   });
 });
 

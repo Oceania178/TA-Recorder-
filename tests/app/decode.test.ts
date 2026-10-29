@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { demuxWebmOpus } from "../../src/main/webm";
 import { Downsampler } from "../../src/renderer/downsample";
-import { deletePcmFiles, makeLoadPcm, pcmPaths, PCM_SAMPLE_RATE } from "../../src/main/pcmFiles";
+import { deletePcmFiles, floatToInt16, makeLoadPcm, pcmPaths, PCM_SAMPLE_RATE } from "../../src/main/pcmFiles";
 import { DecoderClient, type DecoderReply, type DecoderRequest } from "../../src/main/decoderClient";
 import type { Job } from "../../src/core";
 
@@ -141,19 +141,19 @@ describe("PCM temp files for core's loadPcm", () => {
     const loadPcm = makeLoadPcm(async (webmFile, pcmFile) => {
       decoded.push(webmFile);
       const v = webmFile.endsWith(".left.webm") ? 0.25 : -0.5;
-      await writeFile(pcmFile, Buffer.from(new Float32Array([v, v, v]).buffer));
+      await writeFile(pcmFile, Buffer.from(floatToInt16(new Float32Array([v, v, v])).buffer));
     });
     const first = await loadPcm(job());
     expect(first?.sampleRate).toBe(PCM_SAMPLE_RATE);
     expect(PCM_SAMPLE_RATE).toBe(16000);
-    expect([...(first?.left ?? [])]).toEqual([0.25, 0.25, 0.25]);
+    expect([...(first?.left ?? [])].map((x) => Math.round(x * 1000) / 1000)).toEqual([0.25, 0.25, 0.25]);
     expect([...(first?.right ?? [])]).toEqual([-0.5, -0.5, -0.5]);
     expect(decoded).toHaveLength(2);
     await loadPcm(job()); // a retry reuses the temp files
     expect(decoded).toHaveLength(2);
     expect(existsSync(pcmPaths(folder, ID).left)).toBe(true);
     await deletePcmFiles(folder, ID);
-    expect((await readdir(folder)).filter((f) => f.endsWith(".pcm"))).toEqual([]);
+    expect((await readdir(folder)).filter((f) => f.endsWith(".s16") || f.endsWith(".pcm"))).toEqual([]);
   });
 
   it("gives null when the audio is missing", async () => {
@@ -169,7 +169,7 @@ describe("PCM temp files for core's loadPcm", () => {
       throw new Error("decoder failed");
     });
     await expect(loadPcm(job())).rejects.toThrow();
-    expect((await readdir(folder)).filter((f) => f.includes(".pcm"))).toEqual([]);
+    expect((await readdir(folder)).filter((f) => f.includes(".s16") || f.includes(".pcm"))).toEqual([]);
   });
 });
 

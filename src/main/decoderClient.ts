@@ -4,6 +4,7 @@
 // call never sits in memory whole, at 48 kHz or otherwise (controller decision, 29/10/2026).
 // The transport is passed in (Electron IPC in main.ts, a fake page in tests). One file at a time.
 import { open, readFile } from "node:fs/promises";
+import { floatToInt16 } from "./pcmFiles";
 import { demuxWebmOpus, type OpusTrack } from "./webm";
 
 export type DecoderRequest =
@@ -109,13 +110,14 @@ export class DecoderClient {
   }
 }
 
-/** Decodes one mono WebM file into a raw float32 16 kHz file (pcmFiles.ts's DecodeToFile). */
+/** Decodes one mono WebM file into a raw 16-bit 16 kHz file (pcmFiles.ts's DecodeToFile). */
 export async function decodeWebmToPcmFile(client: DecoderClient, webmFile: string, pcmFile: string): Promise<void> {
   const track = demuxWebmOpus(new Uint8Array(await readFile(webmFile)));
   const fh = await open(pcmFile, "w");
   try {
     await client.decode(track, async (pcm) => {
-      await fh.write(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength));
+      const ints = floatToInt16(pcm);
+      await fh.write(new Uint8Array(ints.buffer, ints.byteOffset, ints.byteLength));
     });
   } finally {
     await fh.close();

@@ -32,6 +32,7 @@ import { clearGeminiKey, setGeminiKey, setGeminiModel, setSolaceAddress, type Se
 import { runCaptureSelfTest, runCrashSelfTest } from "./smokeCapture";
 import { commandForShortcut, SHORTCUTS, type ShortcutAction } from "./shortcuts";
 import { isPurgeMode, isSweepMode, runHeadlessSweep, runUninstallPurge } from "./sweepMode";
+import { SweepHandover } from "./sweepHandover";
 import { RecorderTray } from "./tray";
 import { telLink, testSolaceAddress, WINDOWS_MIC_SETTINGS } from "./wizardChecks";
 import { createBarWindow, createRecorderWindow, sendCommandToRecorder } from "./windows";
@@ -136,6 +137,9 @@ function sweepAndExit(): void {
     app.exit(0);
     return;
   }
+  // A start or a Solace link during the sweep lands here: remember it and start the app with it afterwards (m-R5).
+  const handover = new SweepHandover();
+  app.on("second-instance", (_event, argv) => handover.noteRequest(argv));
   void runHeadlessSweep({
     userDataDir: app.getPath("userData"),
     documentsDir: app.getPath("documents"),
@@ -144,7 +148,17 @@ function sweepAndExit(): void {
     log: (e, f) => log.event(e, f),
   })
     .catch(() => log.event("retention.sweep_failed", {}))
-    .finally(() => void log.flush().finally(() => app.exit(0)));
+    .finally(async () => {
+      // second-instance is delivered only after "ready"; give a request that just arrived a moment to land.
+      await app.whenReady();
+      await new Promise((done) => setTimeout(done, 300));
+      const args = handover.relaunchArgs();
+      log.event("retention.sweep_handover", { relaunch: args !== null });
+      await log.flush();
+      app.releaseSingleInstanceLock();
+      if (args) app.relaunch({ args });
+      app.exit(0);
+    });
 }
 
 function registerProtocol(): void {

@@ -18,7 +18,7 @@ import { transcribeSegment, type GeminiDeps } from "./gemini";
 import type { FailureReason, Job, SendOutcome, StepOutcome } from "./queue";
 import { solaceLimitProblems } from "./limits";
 import { uploadTranscript, type SolaceDeps } from "./solaceClient";
-import { assembleTurns, buildTranscriptFile, readTranscriptFile, toPayload, writeTranscriptFiles, type ChannelText } from "./transcript";
+import { assembleTurns, buildTranscriptFile, readTranscriptFile, toPayload, UNCLEAR_SEGMENT_TEXT, writeTranscriptFiles, type ChannelText } from "./transcript";
 import { detectSpeechStream, type PcmReader, type VadOptions } from "./vad";
 import { encodeWav } from "./wav";
 
@@ -41,8 +41,8 @@ export interface PcmSource {
   close?(): Promise<void>;
 }
 
-/** Text of a segment Gemini could not handle (a 400 on that segment only, APP review M6). */
-export const UNCLEAR_SEGMENT_TEXT = "[không nghe rõ]";
+/** Text of a segment Gemini could not handle (a 400 on that segment only, APP review M6). Lives in transcript.ts. */
+export { UNCLEAR_SEGMENT_TEXT };
 /** How much the VAD reads at once. */
 const VAD_CHUNK_SECONDS = 10;
 
