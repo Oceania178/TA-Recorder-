@@ -5,7 +5,7 @@ on the laptop with Gemini, and sends **only the transcript text** to Solace (the
 Triet (TA). Explain decisions in plain language; the owner is not a developer.
 
 ## Source of truth
-- **Spec:** `docs/ta-call-recorder-spec-v1.22.md` (a copy of the Solace repo's spec — the master lives in
+- **Spec:** `docs/ta-call-recorder-spec-v1.23.md` (a copy of the Solace repo's spec — the master lives in
   Solace and on OneDrive; if they differ, the newer version wins; never edit the copy here by hand).
   - The app side is §1–§5, §8.1 (Step 0: P1–P7, T1–T14), §8.3, §8.9, §8.22 (Steps 0–2, 5), §8.23 (D-132
     wizard), §8.24 (the data contract), and decisions D-12 to D-46, D-82, D-84, D-85, D-125, D-126,
