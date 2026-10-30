@@ -56,6 +56,8 @@ export interface CallJobsDeps {
   random?: () => number;
   geminiSleep?(ms: number): Promise<void>;
   geminiMaxAttempts?: number;
+  /** Development-only e2e hook (e2eHooks.ts): a fake Gemini on this laptop. Never set in the installed app. */
+  geminiEndpoint?: string;
   /** Minutes east of UTC at a moment (default: this laptop's zone). */
   tzOffsetMinutes?(ms: number): number;
   setTimer?(fn: () => void, ms: number): unknown;
@@ -123,7 +125,7 @@ export class CallJobs {
       loadPcm: this.d.loadPcm ? (j) => this.d.loadPcm!(j) : undefined,
       getGeminiKey: async () => key,
       getModel: () => this.d.getModel(),
-      gemini: { fetch: this.d.fetch, sleep: this.d.geminiSleep, random: this.d.random, now: this.d.now, maxAttempts: this.d.geminiMaxAttempts },
+      gemini: { fetch: this.d.fetch, sleep: this.d.geminiSleep, random: this.d.random, now: this.d.now, maxAttempts: this.d.geminiMaxAttempts, endpoint: this.d.geminiEndpoint },
       appVersion: this.d.appVersion,
     }, job);
     if (outcome.ok) await this.d.afterTranscript?.(job).catch(() => undefined);

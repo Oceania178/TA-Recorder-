@@ -19,6 +19,7 @@ import { ensureCleanupTask, keepCleanupTask, type CommandRunner } from "./cleanu
 import { RecorderController } from "./controller";
 import { DecoderClient, decodeWebmToPcmFile } from "./decoderClient";
 import { DecoderWindow } from "./decoderWindow";
+import { readE2eHooks } from "./e2eHooks";
 import { DeepLinkFlow, type LinkOutcome } from "./deepLinkFlow";
 import { findDeepLinkArg, onDeepLink, setDeepLinkHandler } from "./deepLinkHook";
 import { createNetFetch } from "./netFetch";
@@ -44,6 +45,8 @@ const PURGE = isPurgeMode(process.argv);
 const START_HIDDEN = process.argv.includes("--hidden");
 /** Development only: allows http://localhost as the Solace address. Ignored in the installed app. */
 const DEV = !app.isPackaged && process.argv.includes("--dev");
+/** Development-only end-to-end hooks (scripts/e2e): null in the installed app and without --dev --e2e. */
+const E2E = readE2eHooks(process.argv, app.isPackaged);
 const rendererDir = join(__dirname, "..", "renderer");
 const preloadPath = join(__dirname, "preload.js");
 const barPreloadPath = join(__dirname, "barPreload.js");
@@ -174,7 +177,7 @@ function registerProtocol(): void {
 async function onReady(): Promise<void> {
   applySecurityPolicy(rendererDir);
   chromiumFetch = createNetFetch();
-  log.event("app.start", { smoke: SMOKE, dev: DEV });
+  log.event("app.start", { smoke: SMOKE, dev: DEV, e2e: E2E !== null });
   secrets = new SecretStore({ dir: join(app.getPath("userData"), "secrets"), crypto: safeStorage });
 
   controller = new RecorderController({
@@ -259,6 +262,8 @@ async function openJobs(c: RecorderController, s: SecretStore): Promise<CallJobs
     afterTranscript: (job) => deletePcmFiles(job.folder, job.id),
     appVersion: app.getVersion(),
     dev: DEV,
+    geminiEndpoint: E2E?.geminiEndpoint ?? undefined,
+    now: E2E?.clockOffsetMs ? () => Date.now() + E2E.clockOffsetMs : undefined,
     log: (e, f) => log.event(e, f),
     onChange: () => callsChanged(),
   });
@@ -556,6 +561,7 @@ async function fullView(c: RecorderController): Promise<SettingsView> {
     geminiKeyHint: (await secrets?.geminiKeyHint()) ?? null,
     keyStorageOk: secrets?.canPersist() ?? false,
     dev: DEV,
+    e2eAudio: E2E?.fakeAudio === true,
     noticeAccepted: !!s.noticeAcceptedAt,
     wizardDone: !!s.wizardDoneAt,
   };

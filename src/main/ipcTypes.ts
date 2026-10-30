@@ -46,6 +46,8 @@ export interface SettingsView extends BaseSettingsView {
   keyStorageOk: boolean;
   /** A --dev build (http://localhost allowed as the Solace address). */
   dev: boolean;
+  /** Development-only e2e hook (--dev --e2e --e2e-audio): scripted audio instead of mic + loopback. */
+  e2eAudio?: boolean;
   noticeAccepted: boolean;
   wizardDone: boolean;
 }

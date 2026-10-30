@@ -104,6 +104,7 @@ async function start(intent: "local" | "linked" = "local"): Promise<void> {
   try {
     session = await startCapture({
       micProcessing: micOn,
+      fakeAudio: settings?.e2eAudio === true,
       onChunk: (track, blob) => {
         chains[track] = chains[track]
           .then(async () => api().appendChunk(id, track, await blob.arrayBuffer()))

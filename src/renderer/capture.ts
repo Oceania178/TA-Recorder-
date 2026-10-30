@@ -11,6 +11,7 @@
 // own clock and a MediaStreamAudioSourceNode with no data outputs zeros, so the right channel gets real-time
 // silence instead of being squeezed (R3). Nothing is connected to the speakers.
 import type { Track } from "../main/ipcTypes";
+import { fakeCallSignal } from "./fakeAudio";
 import { levelFromSamples } from "./levels";
 
 export const MIME_TYPE = "audio/webm;codecs=opus";
@@ -23,6 +24,11 @@ export interface CaptureOptions {
   onChunk: (track: Track, data: Blob) => void;
   /** Something broke mid-call (device unplugged, recorder error). The caller should stop and save. */
   onFatal: (message: string) => void;
+  /**
+   * Development-only e2e hook (main sets it only with --dev --e2e --e2e-audio, never in the installed app):
+   * scripted speech-like bursts (fakeAudio.ts) feed the same graph instead of the mic and the loopback.
+   */
+  fakeAudio?: boolean;
 }
 
 export interface CaptureSession {
@@ -53,8 +59,28 @@ function stopAll(stream: MediaStream | null): void {
   stream?.getTracks().forEach((t) => t.stop());
 }
 
+/** The e2e hook: the scripted call as two mono sources on the graph's clock (left = TA, right = candidate). */
+function fakeSources(ctx: AudioContext): [AudioNode, AudioNode] {
+  const signal = fakeCallSignal(ctx.sampleRate);
+  const source = (samples: Float32Array): AudioNode => {
+    const buffer = ctx.createBuffer(1, samples.length, ctx.sampleRate);
+    buffer.getChannelData(0).set(samples);
+    const node = ctx.createBufferSource();
+    node.buffer = buffer;
+    node.start();
+    return node;
+  };
+  return [source(signal.left), source(signal.right)];
+}
+
 export async function startCapture(opts: CaptureOptions): Promise<CaptureSession> {
   if (!MediaRecorder.isTypeSupported(MIME_TYPE)) throw new Error("This computer cannot record Opus audio (audio/webm;codecs=opus).");
+  if (opts.fakeAudio) {
+    const ctx = new AudioContext({ sampleRate: 48000, latencyHint: "playback" });
+    await ctx.resume();
+    const [left, right] = fakeSources(ctx);
+    return recordGraph(opts, ctx, left, right, null, null);
+  }
 
   let mic: MediaStream | null = null;
   let system: MediaStream | null = null;
@@ -84,94 +110,101 @@ export async function startCapture(opts: CaptureOptions): Promise<CaptureSession
   try {
     ctx = new AudioContext({ sampleRate: 48000, latencyHint: "playback" });
     await ctx.resume();
-
-    const micMono = monoNode(ctx);
-    const sysMono = monoNode(ctx);
-    ctx.createMediaStreamSource(mic).connect(micMono);
-    ctx.createMediaStreamSource(system).connect(sysMono);
-
-    const merger = ctx.createChannelMerger(2);
-    micMono.connect(merger, 0, 0);
-    sysMono.connect(merger, 0, 1);
-
-    const stereoDest = ctx.createMediaStreamDestination();
-    stereoDest.channelCount = 2;
-    merger.connect(stereoDest);
-
-    const splitter = ctx.createChannelSplitter(2);
-    merger.connect(splitter);
-    const leftDest = monoDestination(ctx);
-    const rightDest = monoDestination(ctx);
-    splitter.connect(leftDest, 0);
-    splitter.connect(rightDest, 1);
-
-    const analysers = [ctx.createAnalyser(), ctx.createAnalyser()] as const;
-    analysers.forEach((a, ch) => {
-      a.fftSize = 2048;
-      splitter.connect(a, ch);
-    });
-    const buffers = [new Float32Array(2048), new Float32Array(2048)];
-
-    let fatalSent = false;
-    const fatal = (message: string) => {
-      if (fatalSent) return;
-      fatalSent = true;
-      opts.onFatal(message);
-    };
-    mic.getAudioTracks().forEach((t) => t.addEventListener("ended", () => fatal("The microphone was disconnected. The recording so far has been saved.")));
-    system.getAudioTracks().forEach((t) => t.addEventListener("ended", () => fatal("System audio capture stopped. The recording so far has been saved.")));
-
-    const plan: [Track, MediaStream][] = [
-      ["stereo", stereoDest.stream],
-      ["left", leftDest.stream],
-      ["right", rightDest.stream],
-    ];
-    const recorders = plan.map(([track, stream]) => {
-      const rec = new MediaRecorder(stream, { mimeType: MIME_TYPE, audioBitsPerSecond: BITS_PER_SECOND });
-      rec.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) opts.onChunk(track, e.data);
-      };
-      rec.onerror = () => fatal("The recorder stopped with an error. The recording so far has been saved.");
-      return rec;
-    });
-    // Started back to back so the three files line up.
-    recorders.forEach((r) => r.start(CHUNK_MS));
-
-    const audioCtx = ctx;
-    const micStream = mic;
-    const sysStream = system;
-    return {
-      pause: () => recorders.forEach((r) => r.state === "recording" && r.pause()),
-      resume: () => recorders.forEach((r) => r.state === "paused" && r.resume()),
-      levels: () => {
-        const out: number[] = analysers.map((a, i) => {
-          a.getFloatTimeDomainData(buffers[i]);
-          return levelFromSamples(buffers[i]);
-        });
-        return [out[0], out[1]];
-      },
-      stop: async () => {
-        await Promise.all(
-          recorders.map(
-            (r) =>
-              new Promise<void>((done) => {
-                if (r.state === "inactive") return done();
-                r.addEventListener("stop", () => done(), { once: true });
-                r.stop();
-              }),
-          ),
-        );
-        stopAll(micStream);
-        stopAll(sysStream);
-        await audioCtx.close().catch(() => undefined);
-      },
-    };
+    return recordGraph(opts, ctx, ctx.createMediaStreamSource(mic), ctx.createMediaStreamSource(system), mic, system);
   } catch (err) {
     stopAll(mic);
     stopAll(system);
     await ctx?.close().catch(() => undefined);
     throw err instanceof Error ? err : new Error("Recording could not start.");
   }
+}
+
+/** The one-clock graph and the three recorders, fed by any two sources (left = you, right = other side). */
+function recordGraph(
+  opts: CaptureOptions, ctx: AudioContext, leftSource: AudioNode, rightSource: AudioNode,
+  mic: MediaStream | null, system: MediaStream | null,
+): CaptureSession {
+  const micMono = monoNode(ctx);
+  const sysMono = monoNode(ctx);
+  leftSource.connect(micMono);
+  rightSource.connect(sysMono);
+
+  const merger = ctx.createChannelMerger(2);
+  micMono.connect(merger, 0, 0);
+  sysMono.connect(merger, 0, 1);
+
+  const stereoDest = ctx.createMediaStreamDestination();
+  stereoDest.channelCount = 2;
+  merger.connect(stereoDest);
+
+  const splitter = ctx.createChannelSplitter(2);
+  merger.connect(splitter);
+  const leftDest = monoDestination(ctx);
+  const rightDest = monoDestination(ctx);
+  splitter.connect(leftDest, 0);
+  splitter.connect(rightDest, 1);
+
+  const analysers = [ctx.createAnalyser(), ctx.createAnalyser()] as const;
+  analysers.forEach((a, ch) => {
+    a.fftSize = 2048;
+    splitter.connect(a, ch);
+  });
+  const buffers = [new Float32Array(2048), new Float32Array(2048)];
+
+  let fatalSent = false;
+  const fatal = (message: string) => {
+    if (fatalSent) return;
+    fatalSent = true;
+    opts.onFatal(message);
+  };
+  mic?.getAudioTracks().forEach((t) => t.addEventListener("ended", () => fatal("The microphone was disconnected. The recording so far has been saved.")));
+  system?.getAudioTracks().forEach((t) => t.addEventListener("ended", () => fatal("System audio capture stopped. The recording so far has been saved.")));
+
+  const plan: [Track, MediaStream][] = [
+    ["stereo", stereoDest.stream],
+    ["left", leftDest.stream],
+    ["right", rightDest.stream],
+  ];
+  const recorders = plan.map(([track, stream]) => {
+    const rec = new MediaRecorder(stream, { mimeType: MIME_TYPE, audioBitsPerSecond: BITS_PER_SECOND });
+    rec.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) opts.onChunk(track, e.data);
+    };
+    rec.onerror = () => fatal("The recorder stopped with an error. The recording so far has been saved.");
+    return rec;
+  });
+  // Started back to back so the three files line up.
+  recorders.forEach((r) => r.start(CHUNK_MS));
+
+  const audioCtx = ctx;
+  const micStream = mic;
+  const sysStream = system;
+  return {
+    pause: () => recorders.forEach((r) => r.state === "recording" && r.pause()),
+    resume: () => recorders.forEach((r) => r.state === "paused" && r.resume()),
+    levels: () => {
+      const out: number[] = analysers.map((a, i) => {
+        a.getFloatTimeDomainData(buffers[i]);
+        return levelFromSamples(buffers[i]);
+      });
+      return [out[0], out[1]];
+    },
+    stop: async () => {
+      await Promise.all(
+        recorders.map(
+          (r) =>
+            new Promise<void>((done) => {
+              if (r.state === "inactive") return done();
+              r.addEventListener("stop", () => done(), { once: true });
+              r.stop();
+            }),
+        ),
+      );
+      stopAll(micStream);
+      stopAll(sysStream);
+      await audioCtx.close().catch(() => undefined);
+    },
+  };
 }
 
 /** Device list for the R4 check. Labels are only filled in once the mic has been allowed. */
