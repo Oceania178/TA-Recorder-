@@ -214,7 +214,7 @@ it; add `--dev` only to test against a Solace on `http://localhost`.
 5. **Linked call (Step 5):** Solace must have `APP_BASE_URL` set to the same address as step 4. In Solace,
    press "Call & record" on a role-play candidate at phone screen → the browser asks to open TA Call
    Recorder → allow → recording starts and the window says "Linked to Solace". Talk, stop → Recent calls goes
-   to **Sent**; the transcript appears in Solace's "Paste your notes". Repeat with "Record only, I dial"
+   to **Sent**; the transcript appears in Solace's "Paste your notes". Repeat with "Record only, I'll call myself"
    (`self_dial`): the window says to dial yourself.
 6. **Refusals:** open the same Solace link again after the call → "already been recorded". Open a link more
    than 30 minutes after pressing the button → "Solace did not accept this link… Nothing was recorded."
