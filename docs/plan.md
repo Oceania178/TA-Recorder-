@@ -24,7 +24,7 @@ Electron / electron-builder approved 29/10/2026.
 | 0 | Scaffold; recorder: start/stop/pause, timer, stereo + left + right Opus files, meters, mic-processing switch, crash-safe chunks; unsigned NSIS installer (T14) | recorder built and tested (APP-A, 29/10/2026 — see "Recorder"); `npm run selftest:audio` passes on Triet's laptop (real mic + loopback, 3 files decode, silent loopback keeps time, crash keeps the call). Installer not built yet (controller, last). T1–T5, T10, T14 by hand |
 | 1 | Runs in the background: tray, floating bar, global shortcuts start/pause/stop, one session at a time (D-39), device check and warning (R4, D-42 where Windows allows), no lost file on error (R6) | built (APP-A, 29/10/2026). D-42 "which app is playing" is **not possible** from Electron without native code: the app shows the recorded output device and warns on a silent channel instead. R1–R7 by hand |
 | 2 | Transcription on the laptop: VAD per channel (option B, D-15), queue on disk that resumes after restart, Gemini inline per segment with retries, transcript `.md` + `.json`, send to Solace (ticket check before recording, upload ticket, resend = same call, D-85), 3-day permanent delete + OneDrive refusal (D-140, T20), Gemini key in safeStorage (D-141) | built (core APP-B, wiring APP-C, 29/10/2026 — see "Core modules" and "Integration"): queue after every Stop, chunked 16 kHz decode in a hidden page, Gemini key in safeStorage, timers, 3-day sweep hourly + a per-user logon/daily Task Scheduler task + `--sweep` mode, Recent calls. T6–T9, T20, T22, T37 by hand |
-| 5 (app part) | Opened by Solace's deep link with the ticket checked before recording (D-143, D-144, D-147); `self_dial` (D-133); recording without a session stays local and is never sent (D-82) | built (APP-C, 29/10/2026 — see "Integration"); settings + first-run set-up check (D-132). End-to-end with Solace's "Call & record" by hand (below) |
+| 5 (app part) | Opened by Solace's deep link with the ticket checked before recording (D-143, D-144, D-147); `self_dial` (D-133); the app records **only** when opened from Solace's button; recording without a session (shortcut, tray, window Start) only with **Test mode** on in Settings, as a "Local only" call that is never sent (D-82, D-165) | built (APP-C, 29/10/2026 — see "Integration"); settings + first-run set-up check (D-132); Test mode (D-165) built 30/10/2026. End-to-end with Solace's "Call & record" by hand (below) |
 
 ## Core modules (`src/core/`, APP-B, 29/10/2026)
 Pure TypeScript: no Electron import; `fetch`, clock, sleep and storage are passed in, so every module is
@@ -95,6 +95,8 @@ the zone, e.g. `formatIsoWithOffset(Date.now(), -new Date().getTimezoneOffset())
 
 ## How Triet tests Step 0 / Step 1
 Use role-play calls with a colleague only (D-13). Wear the headset unless the test says not to.
+Since D-165 the shortcut, tray and Start button record only with **Settings → Test mode** on: switch it on for
+these tests (the window, tray tooltip and floating bar show "TEST MODE"), and off again afterwards.
 Windows must let desktop apps use the mic (*Settings → Privacy → Microphone*).
 1. **Quick check, no call:** `npm run selftest:audio` → the last line says `smoke-crash: ok`.
 2. **Start the app:** `npm start`. Check *Settings*: the folder is outside OneDrive; *Device check* names
@@ -206,7 +208,11 @@ it; add `--dev` only to test against a Solace on `http://localhost`.
    Finish.
 2. **Settings:** paste the Gemini key → "Saved: •••• last4". Quit and reopen: still there, never in full.
    `%APPDATA%\ta-call-recorder\settings.json` and `app.log` must not contain the key.
-3. **Local-only call (T6–T9 with a role-play):** Ctrl+Alt+R, talk ~2 min with a colleague, stop. The window
+3. **Test mode off (D-165):** with *Settings → Test mode* off (the default), press **Ctrl+Alt+R**, the tray's
+   Start and the window's Start → each is refused with "Start the call from Solace (Call & record). To record
+   without Solace, turn on Test mode in Settings." and nothing is recorded. A Solace link still records.
+   **Local-only call (T6–T9 with a role-play):** switch Test mode on → "TEST MODE" shows in the window, the
+   tray tooltip and the floating bar. Ctrl+Alt+R, talk ~2 min with a colleague, stop. The window
    says "Local only — not linked to Solace". Recent calls: Recorded → Transcribing → Transcribed, "Local only".
    *Open transcript* shows the turns (you = TA, colleague = candidate). Nothing reaches Solace.
 4. **No key:** remove the key, record 30 s → the call stays "Recorded" with "Add a Gemini key in Settings to
@@ -239,6 +245,17 @@ it; add `--dev` only to test against a Solace on `http://localhost`.
    the app before anything is deleted. Settings → Change… to a disconnected network drive letter → "Pick a folder on this laptop." A folder
    inside OneDrive is refused. Check the installed exe starts normally (the fuses are set at packaging).
 
+### D-165 Test mode (30/10/2026)
+- `settings.json` field `testMode` (off by default; not a secret). *Settings → Test mode* switches it; not during a
+  recording.
+- Off: every start without a Solace session — window Start, tray, Ctrl+Alt+R — is refused with "Start the call
+  from Solace (Call & record). To record without Solace, turn on Test mode in Settings." (renderer, `startGate`
+  and the controller all check; the controller is the last word). Solace's link records as before.
+- On: the earlier local-only path, unchanged: "Local only", transcribed with Gemini if a key is set, never sent.
+  "TEST MODE" shows in the window header, the tray tooltip and the floating bar.
+- The notice gate (D-162) is checked first. The self-tests switch Test mode on in their throwaway profile; the
+  E2E run (step 9) first checks the refusal, then switches it on with the window's Settings switch.
+
 ## Tests the owner runs by hand (they need a real call / real audio)
 T1, T2, T3, T4, T5, T10, T14 (Step 0); R1–R7; T6, T7, T8, T9, T20, T22, T37 (with role-play calls and the
 real Gemini key, after Legal for real candidates).
@@ -265,7 +282,8 @@ It asserts the 11 steps of the flow:
   different payload, and a reused or expired link refused with nothing recorded;
 - the calls list, the prefill and Auto-fill;
 - search, Ask Sol and `ai_ready`;
-- a local-only call that is never sent;
+- with Test mode off, a start without a link is refused (D-165); then Test mode is switched on in Settings and a
+  local-only call is recorded, transcribed and never sent;
 - the 3-day sweep with the clock moved 73 h ahead;
 - the time tracker after a Confirm.
 
