@@ -247,3 +247,43 @@ real Gemini key, after Legal for real candidates).
 - `npm run dist:win` (unsigned, `CSC_IDENTITY_AUTO_DISCOVERY=false`) → `release\TA Call Recorder Setup 0.1.0.exe` (81.8 MB, NSIS, per-user, choose folder). The custom uninstall macros compiled.
 - First run of electron-builder failed on Windows symlinks inside its `winCodeSign` archive ("A required privilege is not held"); fixed the same way Solace's `desktop/build-win.ps1` does: extract the archive into `%LOCALAPPDATA%\electron-builder\Cache\winCodeSign\winCodeSign-2.6.0` without its `darwin` folder, then build again. No admin, no Developer Mode.
 - The packaged exe (fuses set, `app.asar` only) passes `--smoke`, `--smoke-capture` (real mic + loopback: three files decode at 4.98 s, silent right channel keeps time, transcription decode at 16 kHz) and `--smoke-crash` (recovered). Not installed on this laptop by the controller: installing, the uninstall Cancel test, the task, T14 and every hand test in this plan are Triet's.
+
+## End-to-end run with Solace (E2E, 30/10/2026)
+`node scripts/e2e/run.mjs` (details and how to rerun: `scripts/e2e/README.md`). It runs the real Solace backend
+(`feat/call-recorder-phase-0-1`) and this app's development build together, on this laptop only, in about 5 minutes. It uses:
+- a throwaway SQLite database;
+- invented names and sentences;
+- a fake Gemini, a fake LLM, and a logging proxy in front of Solace, all on `127.0.0.1`.
+
+It asserts the 11 steps of the flow:
+- seed;
+- sessions for `3cx` and `self_dial`;
+- the ticket check;
+- recording and the files it leaves;
+- transcription, including a 400 → "[không nghe rõ]" and a 429 → retry;
+- sending, including a lost answer → a resend that becomes a duplicate with the same `call_id`, a 409 for a
+  different payload, and a reused or expired link refused with nothing recorded;
+- the calls list, the prefill and Auto-fill;
+- search, Ask Sol and `ai_ready`;
+- a local-only call that is never sent;
+- the 3-day sweep with the clock moved 73 h ahead;
+- the time tracker after a Confirm.
+
+First runs on 30/10/2026: all 11 pass.
+
+**Development-only test hooks** (`src/main/e2eHooks.ts`) used by that run:
+- `--e2e-audio`: scripted speech-like bursts (`src/renderer/fakeAudio.ts`) feed the same Web Audio graph and
+  recorders instead of the mic and the loopback;
+- `--e2e-gemini-endpoint=http://127.0.0.1:<port>`;
+- `--e2e-clock-offset-ms=<n>`: the queue and the sweep only, never Windows time.
+
+The hooks are read only when the app is not packaged **and** was started with both `--dev` and `--e2e`.
+`tests/app/e2eHooks.test.ts` proves the installed app ignores them.
+
+Everything else the run needs comes from Electron itself:
+- a temp profile (`--user-data-dir`);
+- the debugging port, to press Start / Stop and save the fake Gemini key through the page's own Settings API;
+- `settings.json` written before the start: notice accepted, Solace address, recordings folder.
+
+`capture.ts` now builds the graph in `recordGraph()`, fed by either source. The real mic + loopback path is
+unchanged apart from that move. **Rerun `npm run selftest:audio` once with the real devices.**
