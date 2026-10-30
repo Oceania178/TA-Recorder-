@@ -1,7 +1,7 @@
 {
   "name": "ta-call-recorder",
   "productName": "TA Call Recorder",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Records a TA's phone-screen call, transcribes it on the laptop, sends only the transcript to Solace.",
   "main": "dist/main/main.js",

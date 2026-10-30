@@ -305,3 +305,7 @@ Everything else the run needs comes from Electron itself:
 
 `capture.ts` now builds the graph in `recordGraph()`, fed by either source. The real mic + loopback path is
 unchanged apart from that move. **Rerun `npm run selftest:audio` once with the real devices.**
+
+## Installer 0.1.1 (controller, 30/10/2026)
+- Version 0.1.1 = everything above plus D-165 Test mode and the v1.24 spec. `release\TA Call Recorder Setup 0.1.1.exe` (81.8 MB, unsigned). Installing over 0.1.0 is an update: recordings, settings and key are kept.
+- Packaged exe: `--smoke --smoke-capture --smoke-crash` pass (real mic + loopback, 3 files at 4.98 s, crash recovery). E2E script (dev build): 11/11 steps pass.
