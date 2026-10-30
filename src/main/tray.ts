@@ -2,7 +2,7 @@
 import { Menu, nativeImage, Tray } from "electron";
 import type { RecorderState } from "./ipcTypes";
 import { SHORTCUTS } from "./shortcuts";
-import { dotBitmap, trayColourFor } from "./trayIcon";
+import { dotBitmap, trayColourFor, trayTooltip } from "./trayIcon";
 
 export interface TrayActions {
   start(): void;
@@ -22,16 +22,10 @@ function iconFor(state: RecorderState): Electron.NativeImage {
   return image;
 }
 
-const TOOLTIP: Record<RecorderState, string> = {
-  idle: "TA Call Recorder — ready",
-  starting: "TA Call Recorder — starting…",
-  recording: "TA Call Recorder — recording",
-  paused: "TA Call Recorder — paused",
-  stopping: "TA Call Recorder — saving…",
-};
-
 export class RecorderTray {
   private readonly tray: Tray;
+  private state: RecorderState = "idle";
+  private testMode = false;
 
   constructor(private readonly actions: TrayActions) {
     this.tray = new Tray(iconFor("idle"));
@@ -39,9 +33,16 @@ export class RecorderTray {
     this.update("idle");
   }
 
+  /** D-165: show "TEST MODE" in the tooltip while Test mode is on. */
+  setTestMode(on: boolean): void {
+    this.testMode = on;
+    this.tray.setToolTip(trayTooltip(this.state, this.testMode));
+  }
+
   update(state: RecorderState): void {
+    this.state = state;
     this.tray.setImage(iconFor(state));
-    this.tray.setToolTip(TOOLTIP[state]);
+    this.tray.setToolTip(trayTooltip(state, this.testMode));
     const active = state === "recording" || state === "paused";
     const menu = Menu.buildFromTemplate([
       { label: `Start recording (${SHORTCUTS.toggleRecord.label})`, enabled: state === "idle", click: () => this.actions.start() },

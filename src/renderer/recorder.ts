@@ -36,6 +36,7 @@ const STATUS_TEXT: Record<RecorderState, string> = {
 };
 
 const NOTICE_FIRST = "Open Set-up check and accept the notice first.";
+const TEST_MODE_OFF = "Start the call from Solace (Call & record). To record without Solace, turn on Test mode in Settings.";
 
 function showMessage(text: string, kind: "info" | "error" | "ok" | "warn" = "info"): void {
   const el = $("message");
@@ -60,12 +61,13 @@ function setState(next: RecorderState): void {
   ($("btn-pause") as HTMLButtonElement).textContent = next === "paused" ? "Resume" : "Pause";
   ($("btn-stop") as HTMLButtonElement).disabled = next !== "recording" && next !== "paused";
   ($("mic-processing") as HTMLInputElement).disabled = next !== "idle";
+  ($("test-mode") as HTMLInputElement).disabled = next !== "idle";
   ($("btn-change-dir") as HTMLButtonElement).disabled = next !== "idle";
   report();
 }
 
 function report(): void {
-  api().reportStatus({ state, elapsedMs: clock.elapsed(performance.now()), levels, warning });
+  api().reportStatus({ state, elapsedMs: clock.elapsed(performance.now()), levels, warning, testMode: settings?.testMode === true });
 }
 
 function micSettings(on: boolean) {
@@ -78,6 +80,11 @@ async function start(intent: "local" | "linked" = "local"): Promise<void> {
     // D-126 (APP review I1): no recording before the notice is accepted.
     showMessage(NOTICE_FIRST, "error");
     openWizard(settings);
+    return;
+  }
+  if (intent === "local" && settings && !settings.testMode) {
+    // D-165: without Test mode the app records only when opened from Solace's button.
+    showMessage(TEST_MODE_OFF, "error");
     return;
   }
   if (state !== "idle") {
@@ -239,6 +246,8 @@ function renderSettings(view: SettingsView): void {
   $("dir-problem").textContent = view.dirProblem ?? "";
   $("dir-problem").hidden = !view.dirProblem;
   ($("mic-processing") as HTMLInputElement).checked = view.micProcessing;
+  ($("test-mode") as HTMLInputElement).checked = view.testMode;
+  $("test-mode-badge").hidden = !view.testMode;
   $("shortcut-record").textContent = view.shortcuts.toggleRecord;
   $("shortcut-pause").textContent = view.shortcuts.togglePause;
   $("notices").replaceChildren(...view.notices.map((n) => Object.assign(document.createElement("li"), { textContent: n })));
@@ -265,6 +274,12 @@ async function init(): Promise<void> {
   $("btn-change-dir").addEventListener("click", async () => renderSettings(await api().chooseRecordingsDir()));
   $("btn-open-dir").addEventListener("click", () => void api().openRecordingsFolder());
   $("mic-processing").addEventListener("change", async (e) => renderSettings(await api().setMicProcessing((e.target as HTMLInputElement).checked)));
+  $("test-mode").addEventListener("change", async (e) => {
+    const r = await api().setTestMode((e.target as HTMLInputElement).checked);
+    renderSettings(r.view);
+    $("test-mode-problem").textContent = r.problem ?? "";
+    $("test-mode-problem").hidden = !r.problem;
+  });
   navigator.mediaDevices?.addEventListener?.("devicechange", () => void refreshDevices());
   initSettingsPanel(renderSettings);
   initWizard({ isIdle: () => state === "idle", settingsChanged: renderSettings });

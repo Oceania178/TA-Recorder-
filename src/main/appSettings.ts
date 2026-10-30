@@ -21,6 +21,11 @@ export interface AppSettings {
   cleanupTaskFor: string | null;
   /** Every recordings folder used so far: all are swept at 3 days, and purged on uninstall (APP review I2). */
   knownRecordingsDirs: string[];
+  /**
+   * D-165: off = the app records only when opened from Solace's button. On = a start without a Solace session
+   * (shortcut, tray, window) records a "Local only" call, transcribed on the laptop, never sent to Solace.
+   */
+  testMode: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -32,6 +37,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   wizardDoneAt: null,
   cleanupTaskFor: null,
   knownRecordingsDirs: [],
+  testMode: false,
 };
 
 const FIELDS = Object.keys(DEFAULT_SETTINGS) as (keyof AppSettings)[];
@@ -55,6 +61,7 @@ export async function loadSettings(file: string): Promise<AppSettings> {
   if (stringOrNull(raw.noticeAcceptedAt)) s.noticeAcceptedAt = raw.noticeAcceptedAt;
   if (stringOrNull(raw.wizardDoneAt)) s.wizardDoneAt = raw.wizardDoneAt;
   if (stringOrNull(raw.cleanupTaskFor)) s.cleanupTaskFor = raw.cleanupTaskFor;
+  if (typeof raw.testMode === "boolean") s.testMode = raw.testMode;
   if (Array.isArray(raw.knownRecordingsDirs)) {
     s.knownRecordingsDirs = raw.knownRecordingsDirs.filter((d): d is string => typeof d === "string" && d.trim() !== "").slice(-20);
   }

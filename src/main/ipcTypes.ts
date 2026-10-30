@@ -14,7 +14,7 @@ export interface MicProcessing {
 export type BeginResult =
   | { ok: true; callId: string; linked: boolean; dialMode: "3cx" | "self_dial" | null }
   /** code "notice": the D-126 notice is not accepted yet — the window opens the set-up check. */
-  | { ok: false; message: string; code?: "notice" };
+  | { ok: false; message: string; code?: "notice" | "test_mode" };
 export type EndResult = { ok: true; callId: string } | { ok: false; message: string };
 
 export interface StatusReport {
@@ -23,6 +23,8 @@ export interface StatusReport {
   /** Meter levels 0..1: [left = you, right = other side]. */
   levels: [number, number];
   warning: string | null;
+  /** D-165: Test mode is on (the floating bar shows "TEST MODE"). */
+  testMode?: boolean;
 }
 
 /** What the recorder controller knows (folder, mic, shortcuts, notices). */
@@ -50,6 +52,8 @@ export interface SettingsView extends BaseSettingsView {
   e2eAudio?: boolean;
   noticeAccepted: boolean;
   wizardDone: boolean;
+  /** D-165: recording without a Solace session is allowed (Local only). */
+  testMode: boolean;
 }
 
 /** Answer to a settings change: a plain-words problem (null = saved) and the panel as it is now. */
@@ -101,6 +105,7 @@ export interface RecorderApi {
   setGeminiKey(raw: string): Promise<SettingsChange>;
   clearGeminiKey(): Promise<SettingsView>;
   setGeminiModel(raw: string): Promise<SettingsChange>;
+  setTestMode(on: boolean): Promise<SettingsChange>;
   // Recent calls
   listCalls(): Promise<CallRowView[]>;
   retryCall(id: string): Promise<void>;
@@ -139,6 +144,7 @@ export const IPC = {
   setGeminiKey: "settings:gemini-key",
   clearGeminiKey: "settings:clear-gemini-key",
   setGeminiModel: "settings:gemini-model",
+  setTestMode: "settings:test-mode",
   listCalls: "calls:list",
   retryCall: "calls:retry",
   openCallFolder: "calls:open-folder",

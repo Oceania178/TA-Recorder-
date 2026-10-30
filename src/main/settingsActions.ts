@@ -60,3 +60,11 @@ export async function clearGeminiKey(h: SettingsHost): Promise<void> {
   await h.secrets.clearGeminiKey();
   h.keyChanged();
 }
+
+
+/** D-165: Test mode — recording without a Solace session. Not changed in the middle of a recording. */
+export async function setTestMode(h: SettingsHost, on: unknown): Promise<string | null> {
+  if (h.isRecording()) return DURING_CALL;
+  await h.save({ testMode: on === true });
+  return null;
+}

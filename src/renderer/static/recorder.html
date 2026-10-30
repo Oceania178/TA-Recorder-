@@ -10,7 +10,7 @@
   <body data-state="idle">
     <main>
       <header>
-        <h1>TA Call Recorder</h1>
+        <h1>TA Call Recorder <span class="test-badge" id="test-mode-badge" hidden>TEST MODE</span></h1>
         <span class="status-pill" id="status">Ready</span>
       </header>
 
@@ -39,8 +39,8 @@
           <kbd id="shortcut-record">Ctrl+Alt+R</kbd> start / stop · <kbd id="shortcut-pause">Ctrl+Alt+P</kbd> pause / resume
         </p>
         <p class="hint center">
-          Start here (or with the shortcut) records a <strong>local-only</strong> call, never sent to Solace. To link a call to a
-          candidate, use "Call &amp; record" in Solace.
+          Start a call from Solace ("Call &amp; record"). Start here, the tray or the shortcut works only in
+          <strong>Test mode</strong> (Settings) and records a <strong>local-only</strong> call, never sent to Solace.
         </p>
         <p class="hint center">Mute other sounds (chat, music) during a call — the right channel records everything you hear.</p>
 
@@ -115,6 +115,16 @@
             <button id="btn-open-dir" type="button">Open folder</button>
           </div>
         </div>
+        <label class="field checkbox">
+          <input type="checkbox" id="test-mode" />
+          <span>
+            Test mode — record without Solace
+            <small>Off: the app records only calls started from Solace ("Call &amp; record"). On: Start, the tray and the
+            shortcut record a "Local only" call, transcribed on this laptop and never sent to Solace. For tests and
+            role-play only.</small>
+          </span>
+        </label>
+        <p class="message warn" id="test-mode-problem" hidden></p>
         <label class="field checkbox">
           <input type="checkbox" id="mic-processing" />
           <span>

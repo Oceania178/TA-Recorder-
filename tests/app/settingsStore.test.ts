@@ -43,7 +43,7 @@ describe("settings file", () => {
     expect(await loadSettings(join(dir, "settings.json"))).toEqual(DEFAULT_SETTINGS);
     expect(DEFAULT_SETTINGS).toEqual({
       recordingsDir: null, micProcessing: false, solaceBaseUrl: null, geminiModel: null,
-      noticeAcceptedAt: null, wizardDoneAt: null, cleanupTaskFor: null, knownRecordingsDirs: [],
+      noticeAcceptedAt: null, wizardDoneAt: null, cleanupTaskFor: null, knownRecordingsDirs: [], testMode: false,
     });
   });
 

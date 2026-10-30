@@ -8,6 +8,7 @@ import { isTrack } from "./callFiles";
 import { isValidCallId, makeCallId } from "./callId";
 import { CallWriter } from "./chunkStore";
 import { NOTICE_FIRST_MESSAGE, type LinkedSession } from "./deepLinkFlow";
+import { TEST_MODE_OFF_MESSAGE } from "./startGate";
 import type { BaseSettingsView, BeginResult, EndResult, MicProcessing, RecorderState } from "./ipcTypes";
 import { checkRecordingsDir, defaultRecordingsDir } from "./recordingsFolder";
 import { recoverLeftovers } from "./recovery";
@@ -191,6 +192,11 @@ export class RecorderController {
     if (!this.noticeAccepted()) {
       this.armed = null;
       return { ok: false, code: "notice", message: NOTICE_FIRST_MESSAGE };
+    }
+    if (intent === "local" && !this.settings.testMode) {
+      // D-165: without Test mode the app records only when opened from Solace's button.
+      this.armed = null;
+      return { ok: false, code: "test_mode", message: TEST_MODE_OFF_MESSAGE };
     }
     const session = intent === "linked" ? this.takeArmed() : null;
     if (intent === "local") this.armed = null;

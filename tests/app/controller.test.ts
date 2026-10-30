@@ -34,7 +34,7 @@ describe("RecorderController", () => {
   it("records a whole call into three files plus metadata", async () => {
     const c = make();
     await c.init();
-    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z" });
+    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z", testMode: true });
     const begin = await c.beginCall(MIC);
     expect(begin.ok).toBe(true);
     if (!begin.ok) return;
@@ -54,7 +54,7 @@ describe("RecorderController", () => {
   it("leaves call folders that core's 3-day sweep recognises and deletes (D-140)", async () => {
     const c = make();
     await c.init();
-    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z" });
+    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z", testMode: true });
     const b = await c.beginCall(MIC);
     if (!b.ok) throw new Error("start failed");
     c.noteCaptureStarted();
@@ -70,7 +70,7 @@ describe("RecorderController", () => {
   it("refuses a second start while recording (D-39)", async () => {
     const c = make();
     await c.init();
-    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z" });
+    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z", testMode: true });
     const first = await c.beginCall(MIC);
     const second = await c.beginCall(MIC);
     expect(first.ok).toBe(true);
@@ -81,7 +81,7 @@ describe("RecorderController", () => {
   it("refuses to record into OneDrive (T20)", async () => {
     const c = make({ OneDrive: join(base, "Documents") });
     await c.init();
-    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z" });
+    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z", testMode: true });
     const r = await c.beginCall(MIC);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.message).toMatch(/OneDrive/);
@@ -92,7 +92,7 @@ describe("RecorderController", () => {
   it("refuses chunks for a call that is not running, and wrong tracks", async () => {
     const c = make();
     await c.init();
-    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z" });
+    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z", testMode: true });
     const b = await c.beginCall(MIC);
     if (!b.ok) throw new Error("start failed");
     await expect(c.appendChunk("20200101-000000-ffffff", "stereo", new ArrayBuffer(1))).rejects.toThrow(/refused/);
@@ -103,7 +103,7 @@ describe("RecorderController", () => {
   it("keeps what was recorded when the recorder page crashes (R6)", async () => {
     const c = make();
     await c.init();
-    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z" });
+    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z", testMode: true });
     const b = await c.beginCall(MIC);
     if (!b.ok) throw new Error("start failed");
     await c.appendChunk(b.callId, "stereo", new Uint8Array([1, 2, 3]).buffer);
@@ -121,7 +121,7 @@ describe("RecorderController", () => {
     await writeFile(join(dir, `${id}.webm.part`), "SSS");
     const c = make();
     await c.init();
-    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z" });
+    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z", testMode: true });
     expect(existsSync(join(recordings(), id, `${id}.webm`))).toBe(true);
     expect(c.settingsView().notices).toHaveLength(1);
     expect(c.settingsView().notices).toHaveLength(0);
@@ -130,7 +130,7 @@ describe("RecorderController", () => {
   it("does not let the folder change during a recording, and refuses OneDrive", async () => {
     const c = make({ OneDrive: join(base, "OD") });
     await c.init();
-    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z" });
+    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z", testMode: true });
     expect(await c.setRecordingsDir(join(base, "OD", "x"))).toMatch(/OneDrive/);
     expect(await c.setRecordingsDir(join(base, "Calls"))).toBeNull();
     expect(c.recordingsDir()).toBe(join(base, "Calls"));
@@ -158,7 +158,7 @@ describe("RecorderController: calls linked to Solace (Step 5) and the hand-off t
     const saved: any[] = [];
     const c = makeWithSaved(saved);
     await c.init();
-    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z" });
+    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z", testMode: true });
     c.armLinkedCall(SESSION);
     const b = await c.beginCall(MIC, "linked");
     expect(b).toEqual({ ok: true, callId: SID, linked: true, dialMode: "self_dial" });
@@ -175,7 +175,7 @@ describe("RecorderController: calls linked to Solace (Step 5) and the hand-off t
     const saved: any[] = [];
     const c = makeWithSaved(saved);
     await c.init();
-    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z" });
+    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z", testMode: true });
     const b = await c.beginCall(MIC);
     expect(b).toMatchObject({ ok: true, linked: false, dialMode: null });
     if (!b.ok) return;
@@ -188,7 +188,7 @@ describe("RecorderController: calls linked to Solace (Step 5) and the hand-off t
   it("drops an armed session that never started (e.g. the mic was blocked)", async () => {
     const c = makeWithSaved([]);
     await c.init();
-    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z" });
+    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z", testMode: true });
     c.armLinkedCall(SESSION, Date.now() - 120_000);
     expect(await c.beginCall(MIC, "linked")).toMatchObject({ ok: false });
     const b = await c.beginCall(MIC);
@@ -199,7 +199,7 @@ describe("RecorderController: calls linked to Solace (Step 5) and the hand-off t
     const saved: any[] = [];
     const c = makeWithSaved(saved);
     await c.init();
-    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z" });
+    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z", testMode: true });
     c.armLinkedCall(SESSION);
     const b = await c.beginCall(MIC, "linked");
     if (!b.ok) throw new Error("start failed");
@@ -212,7 +212,7 @@ describe("RecorderController: calls linked to Solace (Step 5) and the hand-off t
   it("knows a session already has a call folder", async () => {
     const c = makeWithSaved([]);
     await c.init();
-    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z" });
+    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z", testMode: true });
     expect(c.hasCall(SID)).toBe(false);
     await mkdir(join(recordings(), SID), { recursive: true });
     expect(c.hasCall(SID)).toBe(true);

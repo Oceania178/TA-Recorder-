@@ -402,6 +402,16 @@ async function run() {
   const proxyBeforeLocal = proxy.log.length;
   const geminiBeforeLocal = gemini.log.length;
   const recordsBefore = await prisma.callRecord.count();
+  // D-165: with Test mode off (the default) a start without a Solace session is refused and records nothing.
+  const foldersBeforeLocal = callFolders().length;
+  await page.eval(`window.__taRecorderCommand("start")`);
+  await sleep(2000);
+  const refusedMsg = await page.eval(`document.getElementById("message").textContent`);
+  check(9, "with Test mode off, a start without a link is refused (D-165) and records nothing", /Test mode in Settings/.test(refusedMsg ?? "") && (await appState()) === "idle" && callFolders().length === foldersBeforeLocal, refusedMsg);
+  // Switched on the way a TA does it: the Test mode switch in the window's Settings.
+  await page.eval(`document.getElementById("test-mode").click()`);
+  const testModeOn = await waitFor("Test mode on", async () => (await page.eval(`document.getElementById("test-mode").checked && !document.getElementById("test-mode-badge").hidden`)) === true, 10_000, 200);
+  check(9, "Test mode switched on in Settings; the window shows TEST MODE", testModeOn === true, testModeOn);
   await page.eval(`window.__taRecorderCommand("start")`);
   await waitFor("local recording", async () => (await appState()) === "recording", 30_000, 200);
   check(9, "a start without a link records Local only", /Local only/.test((await linkState()) ?? ""), await linkState());

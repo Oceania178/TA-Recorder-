@@ -61,7 +61,7 @@ describe("I1: nothing records until the D-126 notice is accepted", () => {
     c.armLinkedCall({ sessionId: SID, dialMode: "3cx", sendBy: SEND_BY });
     expect(await c.beginCall(MIC, "linked")).toMatchObject({ ok: false, code: "notice" });
     expect(c.guard.state).toBe("idle");
-    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z" });
+    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z", testMode: true });
     expect((await c.beginCall(MIC)).ok).toBe(true);
   });
 
@@ -69,6 +69,7 @@ describe("I1: nothing records until the D-126 notice is accepted", () => {
     const seen: string[] = [];
     requestLocalStart({
       noticeAccepted: () => false,
+      testMode: () => true,
       isRecording: () => false,
       disarm: () => seen.push("disarm"),
       start: () => seen.push("start"),
@@ -154,7 +155,7 @@ describe("M4: an armed Solace session never attaches to a later local start", ()
   it("a local start drops the armed session; a linked start after it expired is refused", async () => {
     const c = controller();
     await c.init();
-    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z" });
+    await c.updateSettings({ noticeAcceptedAt: "2026-10-29T00:00:00.000Z", testMode: true });
     c.armLinkedCall({ sessionId: SID, dialMode: "3cx", sendBy: SEND_BY });
     const local = await c.beginCall(MIC, "local");
     expect(local).toMatchObject({ ok: true, linked: false });
@@ -166,7 +167,7 @@ describe("M4: an armed Solace session never attaches to a later local start", ()
 
   it("tray and shortcut starts disarm before pressing Start", () => {
     const seen: string[] = [];
-    requestLocalStart({ noticeAccepted: () => true, isRecording: () => false, disarm: () => seen.push("disarm"), start: () => seen.push("start"), refuse: () => seen.push("refuse") });
+    requestLocalStart({ noticeAccepted: () => true, testMode: () => true, isRecording: () => false, disarm: () => seen.push("disarm"), start: () => seen.push("start"), refuse: () => seen.push("refuse") });
     expect(seen).toEqual(["disarm", "start"]);
   });
 });

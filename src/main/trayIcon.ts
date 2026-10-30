@@ -38,3 +38,17 @@ export function dotBitmap(size: number, colour: Rgb): Buffer {
   }
   return buf;
 }
+
+
+const TOOLTIP: Record<RecorderState, string> = {
+  idle: "TA Call Recorder — ready",
+  starting: "TA Call Recorder — starting…",
+  recording: "TA Call Recorder — recording",
+  paused: "TA Call Recorder — paused",
+  stopping: "TA Call Recorder — saving…",
+};
+
+/** The tray tooltip; " · TEST MODE" while Test mode is on (D-165). */
+export function trayTooltip(state: RecorderState, testMode: boolean): string {
+  return testMode ? `${TOOLTIP[state]} · TEST MODE` : TOOLTIP[state];
+}

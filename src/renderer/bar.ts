@@ -25,6 +25,7 @@ function render(s: StatusReport): void {
   ($("btn-stop") as HTMLButtonElement).disabled = s.state !== "recording" && s.state !== "paused";
   $("bar").title = s.warning ?? "";
   $("warn").hidden = !s.warning;
+  $("test-mode-badge").hidden = s.testMode !== true;
 }
 
 $("btn-pause").addEventListener("click", () => api().sendBarCommand(current === "paused" ? "resume" : "pause"));

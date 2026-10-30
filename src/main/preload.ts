@@ -20,6 +20,7 @@ const api: RecorderApi = {
   setGeminiKey: (raw: string) => ipcRenderer.invoke(IPC.setGeminiKey, raw),
   clearGeminiKey: () => ipcRenderer.invoke(IPC.clearGeminiKey),
   setGeminiModel: (raw: string) => ipcRenderer.invoke(IPC.setGeminiModel, raw),
+  setTestMode: (on: boolean) => ipcRenderer.invoke(IPC.setTestMode, on),
   listCalls: () => ipcRenderer.invoke(IPC.listCalls),
   retryCall: (id: string) => ipcRenderer.invoke(IPC.retryCall, id),
   openCallFolder: (id: string) => ipcRenderer.invoke(IPC.openCallFolder, id),

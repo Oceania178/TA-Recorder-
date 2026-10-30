@@ -111,3 +111,13 @@ button:disabled {
 [hidden] {
   display: none !important;
 }
+
+/* D-165: Test mode badge */
+.test-badge {
+  font-size: 10px;
+  font-weight: 700;
+  background: #d97706;
+  color: #fff;
+  border-radius: 3px;
+  padding: 0 4px;
+}

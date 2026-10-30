@@ -29,7 +29,7 @@ import { IPC, type AppMessage, type Command, type RecorderState, type SettingsVi
 import { deletePcmFiles, makeOpenPcm } from "./pcmFiles";
 import { SecretStore } from "./secretStore";
 import { applySecurityPolicy, isOwnPage } from "./security";
-import { clearGeminiKey, setGeminiKey, setGeminiModel, setSolaceAddress, type SettingsHost } from "./settingsActions";
+import { clearGeminiKey, setGeminiKey, setGeminiModel, setSolaceAddress, setTestMode, type SettingsHost } from "./settingsActions";
 import { runCaptureSelfTest, runCrashSelfTest } from "./smokeCapture";
 import { commandForShortcut, SHORTCUTS, type ShortcutAction } from "./shortcuts";
 import { isPurgeMode, isSweepMode, runHeadlessSweep, runUninstallPurge } from "./sweepMode";
@@ -210,6 +210,8 @@ async function onReady(): Promise<void> {
   }
   // The self-tests record into a throwaway folder; the notice (D-126) is a decision for a person, not a test.
   if (SMOKE && !c.noticeAccepted()) await c.updateSettings({ noticeAcceptedAt: new Date().toISOString() });
+  // Their recordings are local (no Solace session), which D-165 allows only in Test mode.
+  if (SMOKE && !c.appSettings.testMode) await c.updateSettings({ testMode: true });
   void secrets.pruneExpired(Date.now()).catch(() => undefined);
 
   registerIpc(c);
@@ -230,6 +232,7 @@ async function onReady(): Promise<void> {
     quit: () => quit(),
   });
   registerShortcuts();
+  tray.setTestMode(c.appSettings.testMode);
 
   if (!SMOKE) {
     await runSweep();
@@ -489,6 +492,7 @@ export function requestStart(): void {
   if (!c || !recorderWin) return;
   requestLocalStart({
     noticeAccepted: () => c.noticeAccepted(),
+    testMode: () => c.appSettings.testMode,
     isRecording: () => c.guard.isActive,
     disarm: () => c.disarm(),
     start: () => {
@@ -564,6 +568,7 @@ async function fullView(c: RecorderController): Promise<SettingsView> {
     e2eAudio: E2E?.fakeAudio === true,
     noticeAccepted: !!s.noticeAcceptedAt,
     wizardDone: !!s.wizardDoneAt,
+    testMode: s.testMode,
   };
 }
 
@@ -647,6 +652,15 @@ function registerIpc(c: RecorderController): void {
     const h = host();
     if (h) await clearGeminiKey(h);
     return fullView(c);
+  });
+  handle(IPC.setTestMode, async (on) => {
+    const h = host();
+    const problem = h ? await setTestMode(h, on === true) : "Not ready yet.";
+    if (!problem) {
+      log.event("settings.test_mode", { on: on === true });
+      tray?.setTestMode(c.appSettings.testMode);
+    }
+    return { problem, view: await fullView(c) };
   });
   handle(IPC.setGeminiModel, async (raw) => {
     const h = host();
