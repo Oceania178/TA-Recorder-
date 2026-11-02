@@ -341,3 +341,6 @@ Test mode or the contract changed. Full report: Solace repo `.superpowers/sdd/20
   E2E run (11/11) pass.
 - **Big ideas, not built (need Triet):** see the report: a compact "in call" layout, the last call's stage in the
   tray menu, configurable shortcuts, auto-start when 3CX rings, a transcript preview, a short onboarding video.
+
+## Installer 0.1.4 (controller, 02/11/2026)
+- 0.1.3 plus the UX pass of 02/11/2026 (16 small UI/UX fixes, no core change). 394/394 tests, E2E 11/11, selftest:audio OK.
