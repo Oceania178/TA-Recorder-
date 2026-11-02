@@ -10,6 +10,7 @@ import { initSettingsPanel, renderSettingsPanel } from "./settingsPanel";
 import { SilenceWatch } from "./silenceWatch";
 import { LONG_CALL_STOPPED, LONG_CALL_WARNING, longCallStatus } from "./longCall";
 import { initWizard, openWizard } from "./wizard";
+import { folderBanner, isStaleNoticeMessage, NOTICE_FIRST_MESSAGE, startHint, startIsPrimary } from "./recorderCopy";
 
 const TICK_MS = 200;
 const SILENCE_LIMIT_MS = 60_000;
@@ -35,7 +36,6 @@ const STATUS_TEXT: Record<RecorderState, string> = {
   stopping: "Saving…",
 };
 
-const NOTICE_FIRST = "Open Set-up check and accept the notice first.";
 const TEST_MODE_OFF = "Start the call from Solace (Call & record). To record without Solace, turn on Test mode in Settings.";
 
 function showMessage(text: string, kind: "info" | "error" | "ok" | "warn" = "info"): void {
@@ -78,7 +78,7 @@ function micSettings(on: boolean) {
 async function start(intent: "local" | "linked" = "local"): Promise<void> {
   if (settings && !settings.noticeAccepted) {
     // D-126 (APP review I1): no recording before the notice is accepted.
-    showMessage(NOTICE_FIRST, "error");
+    showMessage(NOTICE_FIRST_MESSAGE, "error");
     openWizard(settings);
     return;
   }
@@ -235,7 +235,8 @@ async function refreshDevices(): Promise<void> {
     warn.textContent = result.warnings.join(" ");
     warn.hidden = result.warnings.length === 0;
   } catch {
-    $("device-warning").textContent = "The device list could not be read.";
+    $("device-recorded").textContent = "unknown";
+    $("device-warning").textContent = "The device list could not be read. Press Check again; if it stays, restart the app.";
     $("device-warning").hidden = false;
   }
 }
@@ -253,7 +254,21 @@ function renderSettings(view: SettingsView): void {
   $("notices").replaceChildren(...view.notices.map((n) => Object.assign(document.createElement("li"), { textContent: n })));
   $("notices").hidden = view.notices.length === 0;
   renderSettingsPanel(view);
+  // UX pass: the next step under Start, Start blue only when it can record, a folder problem next to Start.
+  $("start-hint").textContent = startHint(view.testMode, view.shortcuts.toggleRecord);
+  $("btn-start").classList.toggle("primary", startIsPrimary(view.testMode));
+  const banner = folderBanner(view.dirProblem);
+  $("dir-problem-main-text").textContent = banner ?? "";
+  $("dir-problem-main").hidden = !banner;
+  if (isStaleNoticeMessage($("message").textContent ?? "", view.noticeAccepted)) showMessage("");
   setState(state);
+}
+
+/** Scroll to a Settings field and put the cursor there. */
+function goToSetting(id: string): void {
+  const target = $(id);
+  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  target.focus({ preventScroll: true });
 }
 
 function runCommand(cmd: string): void {
@@ -271,6 +286,8 @@ async function init(): Promise<void> {
   $("btn-pause").addEventListener("click", () => void (state === "paused" ? resume() : pause()));
   $("btn-stop").addEventListener("click", () => void stop());
   $("btn-check-devices").addEventListener("click", () => void refreshDevices());
+  $("btn-dir-settings").addEventListener("click", () => goToSetting("btn-change-dir"));
+  $("btn-key-settings").addEventListener("click", () => goToSetting("gemini-key"));
   $("btn-change-dir").addEventListener("click", async () => renderSettings(await api().chooseRecordingsDir()));
   $("btn-open-dir").addEventListener("click", () => void api().openRecordingsFolder());
   $("mic-processing").addEventListener("change", async (e) => renderSettings(await api().setMicProcessing((e.target as HTMLInputElement).checked)));

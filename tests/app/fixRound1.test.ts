@@ -142,12 +142,12 @@ describe("clock warning (controller addition)", () => {
   it("warns when Solace's clock and the laptop differ by more than 2 minutes", async () => {
     const now = Date.parse("2026-10-29T03:00:00Z");
     expect(clockWarning("2026-10-29T03:01:30Z", now)).toBeNull();
-    expect(clockWarning("2026-10-29T03:05:00Z", now)).toBe("Your laptop clock is off by 5 min — fix Windows time, Solace may reject the call");
-    expect(clockWarning("2026-10-29T02:57:00Z", now)).toBe("Your laptop clock is off by 3 min — fix Windows time, Solace may reject the call");
+    expect(clockWarning("2026-10-29T03:05:00Z", now)).toBe("Your laptop clock is off by 5 min, so Solace may reject the call. Fix it in Windows Settings → Time & language → Date & time → Sync now.");
+    expect(clockWarning("2026-10-29T02:57:00Z", now)).toBe("Your laptop clock is off by 3 min, so Solace may reject the call. Fix it in Windows Settings → Time & language → Date & time → Sync now.");
     expect(clockWarning(null, now)).toBeNull();
     const t = flowWith({ check: { ok: true, sessionId: SID, dialMode: "3cx", uploadTicket: new Secret(UPLOAD_TICKET), sendBy: SEND_BY, serverTime: "2026-10-29T03:10:00Z" } });
     const r = await t.flow.handle(link());
-    expect(r).toMatchObject({ ok: true, clockWarning: "Your laptop clock is off by 10 min — fix Windows time, Solace may reject the call" });
+    expect(r).toMatchObject({ ok: true, clockWarning: "Your laptop clock is off by 10 min, so Solace may reject the call. Fix it in Windows Settings → Time & language → Date & time → Sync now." });
   });
 });
 

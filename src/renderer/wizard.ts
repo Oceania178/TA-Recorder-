@@ -34,6 +34,8 @@ function render(): void {
     const n = Number(li.dataset.step);
     li.classList.toggle("current", n === step);
     li.classList.toggle("pass", pass[n]);
+    if (n === step) li.setAttribute("aria-current", "step");
+    else li.removeAttribute("aria-current");
   });
   document.querySelectorAll<HTMLElement>(".wizard-panel").forEach((p) => (p.hidden = Number(p.dataset.panel) !== step));
   ($("wz-back") as HTMLButtonElement).disabled = step === 1;
@@ -59,6 +61,15 @@ async function go(to: number): Promise<void> {
   if (step === 3 && to !== 3) await stopSound();
   step = Math.max(1, Math.min(STEPS, to));
   render();
+  // Keyboard and screen-reader users land on the new step's title.
+  document.querySelector<HTMLElement>(`.wizard-panel[data-panel="${step}"] h3`)?.focus();
+}
+
+/** "Later" (or Esc): close without accepting anything (D-162: closing is not "I understand"). */
+function closeWizard(): void {
+  void stopSound();
+  $("wizard").hidden = true;
+  $("btn-wizard").focus();
 }
 
 // ---- step 1: notice ----
@@ -157,10 +168,26 @@ export function openWizard(view: SettingsView): void {
 
 export function initWizard(h: WizardHost): void {
   host = h;
-  $("wizard-close").addEventListener("click", () => {
-    void stopSound();
-    $("wizard").hidden = true;
+  $("wizard-close").addEventListener("click", closeWizard);
+  $("wizard").addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeWizard();
+    } else if (e.key === "Tab") {
+      // Keep Tab inside the dialog (aria-modal): wrap from the last control to the first and back.
+      const all = Array.from(document.querySelectorAll<HTMLElement>(".wizard button, .wizard input")).filter((x) => !x.hasAttribute("disabled") && x.offsetParent !== null);
+      const first = all[0];
+      const last = all[all.length - 1];
+      if (e.shiftKey && (document.activeElement === first || !all.includes(document.activeElement as HTMLElement))) {
+        e.preventDefault();
+        last?.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first?.focus();
+      }
+    }
   });
+  document.querySelectorAll<HTMLElement>(".wizard-panel h3").forEach((h) => (h.tabIndex = -1));
   $("wz-back").addEventListener("click", () => void go(step - 1));
   $("wz-next").addEventListener("click", () => void (step === STEPS ? finish() : go(step + 1)));
   $("wz-accept").addEventListener("click", () => void accept());

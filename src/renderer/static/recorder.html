@@ -10,8 +10,8 @@
   <body data-state="idle">
     <main>
       <header>
-        <h1>TA Call Recorder <span class="test-badge" id="test-mode-badge" hidden>TEST MODE</span></h1>
-        <span class="status-pill" id="status">Ready</span>
+        <h1>TA Call Recorder <span class="test-badge" id="test-mode-badge" title="Test mode: Start, the tray and the shortcut record Local only calls, never sent to Solace" hidden>TEST MODE</span></h1>
+        <span class="status-pill" id="status" role="status" aria-live="polite">Ready</span>
       </header>
 
       <section class="card recorder" aria-label="Recorder">
@@ -30,7 +30,7 @@
         </div>
 
         <div class="buttons">
-          <button id="btn-start" class="primary" type="button">Start</button>
+          <button id="btn-start" type="button">Start</button>
           <button id="btn-pause" type="button" disabled>Pause</button>
           <button id="btn-stop" class="danger" type="button" disabled>Stop</button>
         </div>
@@ -38,10 +38,11 @@
         <p class="shortcuts">
           <kbd id="shortcut-record">Ctrl+Alt+R</kbd> start / stop · <kbd id="shortcut-pause">Ctrl+Alt+P</kbd> pause / resume
         </p>
-        <p class="hint center">
-          Start a call from Solace ("Call &amp; record"). Start here, the tray or the shortcut works only in
-          <strong>Test mode</strong> (Settings) and records a <strong>local-only</strong> call, never sent to Solace.
+        <p class="message error" id="dir-problem-main" role="alert" hidden>
+          <span id="dir-problem-main-text"></span>
+          <button id="btn-dir-settings" class="inline" type="button">Open Settings</button>
         </p>
+        <p class="start-hint" id="start-hint">To record a call, press "Call &amp; record" (or "Record only, I'll call myself") on the candidate in Solace. This app starts recording by itself.</p>
         <p class="hint center">Mute other sounds (chat, music) during a call — the right channel records everything you hear.</p>
 
         <p class="message" id="message" role="status" hidden></p>
@@ -52,15 +53,18 @@
 
       <section class="card" id="calls" aria-labelledby="calls-title">
         <h2 id="calls-title">Recent calls</h2>
-        <p class="message warn" id="calls-key-warning" hidden>Add a Gemini key in Settings to transcribe.</p>
-        <p class="hint" id="calls-empty">No calls yet.</p>
-        <ul class="calls" id="calls-list"></ul>
+        <p class="message warn" id="calls-key-warning" hidden>
+          Add a Gemini key in Settings to transcribe.
+          <button id="btn-key-settings" class="inline" type="button">Open Settings</button>
+        </p>
+        <p class="hint" id="calls-empty">No calls yet. Each call you record shows here, with where its transcript is.</p>
+        <ul class="calls" id="calls-list" aria-live="polite"></ul>
         <p class="hint">Recordings and transcripts stay on this laptop for 3 days, then they are deleted for good.</p>
       </section>
 
       <section class="card" aria-labelledby="devices-title">
         <h2 id="devices-title">Device check</h2>
-        <p>System audio is recorded from: <strong id="device-recorded">unknown</strong></p>
+        <p>System audio is recorded from: <strong id="device-recorded">checking…</strong></p>
         <p class="message warn" id="device-warning" hidden></p>
         <details>
           <summary>All output devices</summary>
@@ -146,9 +150,9 @@
       <section class="wizard card" role="dialog" aria-modal="true" aria-labelledby="wizard-title">
         <header>
           <h2 id="wizard-title">Set-up check</h2>
-          <button id="wizard-close" type="button">Later</button>
+          <button id="wizard-close" type="button" title="Close the set-up check (Esc). It can be run again from Settings or the tray.">Later</button>
         </header>
-        <ol class="wizard-steps" id="wizard-steps">
+        <ol class="wizard-steps" id="wizard-steps" aria-label="Steps">
           <li data-step="1">Notice</li>
           <li data-step="2">Microphone</li>
           <li data-step="3">Sound check</li>
@@ -167,14 +171,14 @@
           </ul>
           <p class="message warn"><strong>Calls are transcribed by Google Gemini. Tell the candidate at the start of the call that it is recorded.</strong></p>
           <p class="hint">Nothing can be recorded until you press "I understand".</p>
-          <p class="wizard-status" id="wz-status-1"></p>
+          <p class="wizard-status" id="wz-status-1" role="status"></p>
           <div class="buttons left"><button id="wz-accept" class="primary" type="button">I understand</button></div>
         </div>
 
         <div class="wizard-panel" data-panel="2" hidden>
           <h3>2. Microphone permission</h3>
           <p>Windows must let desktop apps use the microphone.</p>
-          <p class="wizard-status" id="wz-status-2"></p>
+          <p class="wizard-status" id="wz-status-2" role="status"></p>
           <div class="buttons left">
             <button id="wz-mic-test" class="primary" type="button">Test the microphone</button>
             <button id="wz-mic-settings" type="button" hidden>Open Windows microphone settings</button>
@@ -198,7 +202,7 @@
               <div class="meter"><div class="meter-fill wz-right" id="wz-meter-right"></div></div>
             </div>
           </div>
-          <p class="wizard-status" id="wz-status-3"></p>
+          <p class="wizard-status" id="wz-status-3" role="status"></p>
           <div class="buttons left">
             <button id="wz-sound-start" class="primary" type="button">Start</button>
             <button id="wz-beep" type="button" disabled>Play beep</button>
@@ -217,7 +221,7 @@
             <input id="wz-solace-url" type="url" placeholder="https://solace.example.vn" spellcheck="false" autocomplete="off" />
             <button id="wz-solace-test" class="primary" type="button">Save and test</button>
           </div>
-          <p class="wizard-status" id="wz-status-4"></p>
+          <p class="wizard-status" id="wz-status-4" role="status"></p>
           <p class="hint">
             The real test: in Solace, press "Call &amp; record" on a role-play candidate. When the browser asks to open TA Call Recorder,
             tick "Always allow" and open it — the app should start recording.
@@ -234,7 +238,7 @@
             <input id="wz-dial-number" type="tel" placeholder="A harmless number, e.g. your own desk phone" autocomplete="off" />
             <button id="wz-dial" type="button">Test dial</button>
           </div>
-          <p class="wizard-status" id="wz-status-5"></p>
+          <p class="wizard-status" id="wz-status-5" role="status"></p>
           <div class="buttons left">
             <button id="wz-dial-ok" type="button" hidden>Yes, 3CX opened with the number</button>
           </div>

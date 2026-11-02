@@ -3,7 +3,7 @@ import { BrowserWindow, screen } from "electron";
 import { join } from "node:path";
 import type { Command } from "./ipcTypes";
 
-const BAR_WIDTH = 340;
+const BAR_WIDTH = 384;
 const BAR_HEIGHT = 52;
 
 function webPreferences(preload: string): Electron.WebPreferences {

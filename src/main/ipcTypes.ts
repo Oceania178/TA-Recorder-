@@ -159,3 +159,6 @@ export const IPC = {
   decoderRequest: "decoder:request",
   decoderReply: "decoder:reply",
 } as const;
+
+/** The Recent calls line for a call that waits for a Gemini key (row and banner). */
+export const NO_KEY_DETAIL = "Add a Gemini key in Settings to transcribe.";

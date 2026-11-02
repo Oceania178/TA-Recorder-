@@ -31,7 +31,7 @@ describe("Recent calls", () => {
 
   it("says to add a Gemini key when a recorded call waits for one", () => {
     const [row] = callRows([job({ stage: "recorded" })], { hasKey: false, transcriptIds: new Set() });
-    expect(row.detail).toBe("Add a Gemini key in Settings to transcribe");
+    expect(row.detail).toBe("Add a Gemini key in Settings to transcribe.");
   });
 
   it("shows a failure with its reason and a Retry button", () => {

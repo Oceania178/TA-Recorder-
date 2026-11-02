@@ -1,6 +1,7 @@
 // The "Recent calls" list in the recorder window: one row per queued call, in plain words.
 // No candidate names (the app does not know them, D-30) and no folder paths go to the window.
 import type { FailureReason, Job } from "../core";
+import { NO_KEY_DETAIL } from "./ipcTypes";
 
 export interface CallRow {
   id: string;
@@ -60,8 +61,8 @@ function row(j: Job, o: { hasKey: boolean; transcriptIds: ReadonlySet<string> })
   }
   if (j.stage === "local_only") return { ...base, stage: "Transcribed", detail: LOCAL_ONLY };
   let detail: string | null = linked ? null : LOCAL_ONLY;
-  if (j.stage === "recorded" && !o.hasKey) detail = "Add a Gemini key in Settings to transcribe";
-  else if ((j.stage === "recorded" || j.stage === "transcribed") && j.nextAttemptAt) detail = "Waiting to try again (network or service busy)";
+  if (j.stage === "recorded" && !o.hasKey) detail = NO_KEY_DETAIL;
+  else if ((j.stage === "recorded" || j.stage === "transcribed") && j.nextAttemptAt) detail = "Waiting to try again (network or service busy). Nothing to do: it goes on by itself.";
   return { ...base, stage: LABEL[j.stage], detail };
 }
 

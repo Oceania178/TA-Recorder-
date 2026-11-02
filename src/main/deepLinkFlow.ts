@@ -64,7 +64,7 @@ export function clockWarning(serverTime: string | null, nowMs: number): string |
   if (Number.isNaN(server)) return null;
   const off = Math.abs(server - nowMs);
   if (off <= CLOCK_TOLERANCE_MS) return null;
-  return `Your laptop clock is off by ${Math.round(off / 60_000)} min — fix Windows time, Solace may reject the call`;
+  return `Your laptop clock is off by ${Math.round(off / 60_000)} min, so Solace may reject the call. Fix it in Windows Settings → Time & language → Date & time → Sync now.`;
 }
 export const BAD_LINK_MESSAGE = "This link can't start a recording.";
 
