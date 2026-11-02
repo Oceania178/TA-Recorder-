@@ -393,3 +393,6 @@ unchanged. The version stays 0.1.4; the controller builds the installer.
    transcript. With no calls: "No calls yet", Open last transcript greyed out. There is no Test mode item.
 6. Test mode on, Ctrl+Alt+R: the window behaves as before (it is not hidden); the bar shows **Local only**; after
    Stop, "Transcribed (Local only)" and no notification.
+
+## Installer 0.1.5 (controller, 02/11/2026)
+- 0.1.4 plus UX round 2 (P1, P2, P3, P11, P4) and the notification crash fix (show notifications 50 ms later). Spec v1.27 (D-170).
