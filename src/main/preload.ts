@@ -38,7 +38,7 @@ const api: RecorderApi = {
   onAppMessage: (listener: (message: AppMessage) => void) => {
     ipcRenderer.on(IPC.appMessage, (_event, message: AppMessage) => listener(message));
   },
-  sendBarCommand: (command: Command | "open") => ipcRenderer.send(IPC.barCommand, command),
+  sendBarCommand: (command: Command | "open" | "retry" | "close") => ipcRenderer.send(IPC.barCommand, command),
   onStatus: (listener: (status: StatusReport) => void) => {
     ipcRenderer.on(IPC.statusToBar, (_event, status: StatusReport) => listener(status));
   },

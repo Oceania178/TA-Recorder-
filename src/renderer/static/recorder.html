@@ -42,16 +42,16 @@
           <span id="dir-problem-main-text"></span>
           <button id="btn-dir-settings" class="inline" type="button">Open Settings</button>
         </p>
-        <p class="start-hint" id="start-hint">To record a call, press "Call &amp; record" (or "Record only, I'll call myself") on the candidate in Solace. This app starts recording by itself.</p>
+        <p class="start-hint fold-in-call" id="start-hint">To record a call, press "Call &amp; record" (or "Record only, I'll call myself") on the candidate in Solace. This app starts recording by itself.</p>
         <p class="hint center">Mute other sounds (chat, music) during a call — the right channel records everything you hear.</p>
 
         <p class="message" id="message" role="status" hidden></p>
         <p class="message warn" id="warning" role="alert" hidden></p>
         <ul class="notices" id="notices" hidden></ul>
-        <p class="hint" id="last-saved"></p>
+        <p class="hint fold-in-call" id="last-saved"></p>
       </section>
 
-      <section class="card" id="calls" aria-labelledby="calls-title">
+      <section class="card fold-in-call" id="calls" aria-labelledby="calls-title">
         <h2 id="calls-title">Recent calls</h2>
         <p class="message warn" id="calls-key-warning" hidden>
           Add a Gemini key in Settings to transcribe.
@@ -62,7 +62,7 @@
         <p class="hint">Recordings and transcripts stay on this laptop for 3 days, then they are deleted for good.</p>
       </section>
 
-      <section class="card" aria-labelledby="devices-title">
+      <section class="card fold-in-call" id="devices" aria-labelledby="devices-title">
         <h2 id="devices-title">Device check</h2>
         <p>System audio is recorded from: <strong id="device-recorded">checking…</strong></p>
         <p class="message warn" id="device-warning" hidden></p>
@@ -73,7 +73,7 @@
         <button id="btn-check-devices" type="button">Check again</button>
       </section>
 
-      <section class="card" id="settings" aria-labelledby="settings-title">
+      <section class="card fold-in-call" id="settings" aria-labelledby="settings-title">
         <h2 id="settings-title">Settings</h2>
 
         <div class="field">

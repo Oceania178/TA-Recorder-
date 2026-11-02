@@ -23,6 +23,8 @@ export interface StatusReport {
   /** Meter levels 0..1: [left = you, right = other side]. */
   levels: [number, number];
   warning: string | null;
+  /** P3: the call being recorded is linked to Solace (true), Local only (false), or none (null). */
+  linked?: boolean | null;
   /** D-165: Test mode is on (the floating bar shows "TEST MODE"). */
   testMode?: boolean;
 }
@@ -120,7 +122,7 @@ export interface RecorderApi {
   onShowWizard(listener: () => void): void;
   onAppMessage(listener: (message: AppMessage) => void): void;
   /** Floating bar buttons. */
-  sendBarCommand(command: Command | "open"): void;
+  sendBarCommand(command: Command | "open" | "retry" | "close"): void;
   /** Floating bar display. */
   onStatus(listener: (status: StatusReport) => void): void;
 }
@@ -139,6 +141,8 @@ export const IPC = {
   openFolder: "recordings:open-folder",
   barCommand: "bar:command",
   statusToBar: "bar:status",
+  /** P3: after Stop, the bar follows the saved call (barFollow.ts). */
+  followToBar: "bar:follow",
   setSolaceAddress: "settings:solace-address",
   testSolaceAddress: "settings:test-solace-address",
   setGeminiKey: "settings:gemini-key",

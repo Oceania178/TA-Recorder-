@@ -14,7 +14,9 @@ import { createServer } from "node:http";
 import { checkTicket, DEFAULT_GEMINI_MODEL, type FetchLike } from "../core";
 import { AppLog } from "./appLog";
 import { CallJobs } from "./callJobs";
-import { callRows } from "./callsView";
+import { followView } from "./barFollow";
+import { OutcomeWatcher } from "./callOutcomes";
+import { callRows, type CallRow } from "./callsView";
 import { ensureCleanupTask, keepCleanupTask, type CommandRunner } from "./cleanupTask";
 import { RecorderController } from "./controller";
 import { DecoderClient, decodeWebmToPcmFile } from "./decoderClient";
@@ -24,6 +26,9 @@ import { DeepLinkFlow, type LinkOutcome } from "./deepLinkFlow";
 import { findDeepLinkArg, onDeepLink, setDeepLinkHandler } from "./deepLinkHook";
 import { createNetFetch } from "./netFetch";
 import { handleSecondInstance } from "./secondInstance";
+import { LinkStartWindow } from "./linkWindow";
+import { showLater } from "./showLater";
+import { lastCall } from "./trayMenu";
 import { requestLocalStart } from "./startGate";
 import { IPC, type AppMessage, type Command, type RecorderState, type SettingsView, type StatusReport } from "./ipcTypes";
 import { deletePcmFiles, makeOpenPcm } from "./pcmFiles";
@@ -80,6 +85,20 @@ let sweepTimer: ReturnType<typeof setInterval> | null = null;
 let quitting = false;
 let toldAboutTray = false;
 let rendererReady: () => void = () => undefined;
+// ---- UX round 2 (02/11/2026) ----
+/** P2: a Solace start hides the window once its recording runs. */
+const linkWindow = new LinkStartWindow();
+let linkTimer: ReturnType<typeof setTimeout> | null = null;
+const LINK_START_LIMIT_MS = 20_000;
+/** P11: Sent / Failed notifications (kept referenced so their click works). */
+const outcomes = new OutcomeWatcher();
+const liveNotifications = new Set<Notification>();
+/** P3: the call the floating bar follows after Stop. */
+let followId: string | null = null;
+let followSince = 0;
+let followHideTimer: ReturnType<typeof setTimeout> | null = null;
+const FOLLOW_FINAL_MS = 6000;
+const FOLLOW_UNQUEUED_MS = 15_000;
 const rendererReadyPromise = new Promise<void>((done) => (rendererReady = done));
 
 function main(): void {
@@ -199,6 +218,8 @@ async function onReady(): Promise<void> {
 
   try {
     jobs = await openJobs(c, secrets);
+    // P11: remember the stages already there, so nothing old is announced.
+    outcomes.update(await currentRows());
   } catch {
     log.event("queue.open_failed", {});
     c.addNotice("The transcription queue could not be opened. Recording still works; restart the app to transcribe.");
@@ -215,7 +236,7 @@ async function onReady(): Promise<void> {
   void secrets.pruneExpired(Date.now()).catch(() => undefined);
 
   registerIpc(c);
-  recorderWin = createRecorderWindow(rendererDir, preloadPath, !START_HIDDEN && !SMOKE);
+  recorderWin = createRecorderWindow(rendererDir, preloadPath, !START_HIDDEN && !SMOKE && !findDeepLinkArg(process.argv));
   barWin = createBarWindow(rendererDir, barPreloadPath);
   wireRecorderWindow(recorderWin);
 
@@ -229,10 +250,12 @@ async function onReady(): Promise<void> {
       if (recorderWin) sendCommandToRecorder(recorderWin, "settings");
     },
     wizard: () => showWizard(),
+    openLastTranscript: () => void openLastTranscript(),
     quit: () => quit(),
   });
   registerShortcuts();
   tray.setTestMode(c.appSettings.testMode);
+  void refreshCallViews();
 
   if (!SMOKE) {
     await runSweep();
@@ -332,7 +355,12 @@ function wireDeepLinks(c: RecorderController): void {
     alreadyRecorded: (id) => c.hasCall(id) || !!jobs?.get(id),
     start: (session) => {
       c.armLinkedCall(session);
-      showRecorder();
+      // P2: Solace stays in front; the floating bar shows the recording. A failed start shows the window.
+      linkWindow.linkStarted();
+      if (linkTimer) clearTimeout(linkTimer);
+      linkTimer = setTimeout(() => {
+        if (linkWindow.timedOut() === "show") showRecorder();
+      }, LINK_START_LIMIT_MS);
       // On a first launch from the link the page may still be loading: press Start once it is ready.
       void rendererReadyPromise.then(() => {
         if (recorderWin) sendCommandToRecorder(recorderWin, "startLinked");
@@ -341,13 +369,18 @@ function wireDeepLinks(c: RecorderController): void {
     log: (e, f) => log.event(e, f),
   });
   setDeepLinkHandler((url) => {
-    void flow.handle(url).then(tellLinkOutcome, () => tellApp({ kind: "error", text: "This link can't start a recording." }));
+    void flow.handle(url).then(tellLinkOutcome, () => {
+      tellApp({ kind: "error", text: "This link can't start a recording." });
+      showRecorder();
+    });
   });
 }
 
 function tellLinkOutcome(outcome: LinkOutcome): void {
   tellApp({ kind: outcome.ok ? "ok" : "error", text: outcome.message });
   if (!outcome.ok) notify("TA Call Recorder", outcome.message);
+  // P2: a refused link brings the window forward, with the reason and the next step.
+  if (!outcome.ok) showRecorder();
   if (!outcome.ok && outcome.code === "notice") showWizard();
   if (outcome.ok && outcome.clockWarning) {
     // Shown after the start message, and as a notification: Solace may reject a call with a wrong clock.
@@ -362,6 +395,80 @@ function tellApp(message: AppMessage): void {
 
 function callsChanged(): void {
   if (recorderWin && !recorderWin.isDestroyed()) recorderWin.webContents.send(IPC.callsChanged);
+  void refreshCallViews();
+}
+
+/** The Recent calls rows (no paths, no names), newest first. */
+async function currentRows(): Promise<CallRow[]> {
+  const list = jobs?.list() ?? [];
+  const transcriptIds = new Set(list.filter((j) => existsSync(join(j.folder, `${j.id}.transcript.md`))).map((j) => j.id));
+  return callRows(list, { hasKey: !!(await secrets?.getGeminiKey()), transcriptIds });
+}
+
+/** After any queue change: P11 notifications, P4 the tray's last call, P3 the bar's follow-up. */
+async function refreshCallViews(): Promise<void> {
+  if (SMOKE) return;
+  const rows = await currentRows().catch(() => null);
+  if (!rows) return;
+  for (const o of outcomes.update(rows)) notifyOutcome(o.title, o.body);
+  tray?.setLastCall(lastCall(rows));
+  updateFollow(rows);
+}
+
+function notifyOutcome(title: string, body: string): void {
+  if (!Notification.isSupported()) return;
+  const n = new Notification({ title, body, silent: true });
+  liveNotifications.add(n);
+  const done = () => liveNotifications.delete(n);
+  n.on("click", () => {
+    done();
+    showRecorder();
+    if (recorderWin) sendCommandToRecorder(recorderWin, "calls");
+  });
+  n.on("close", done);
+  showLater(() => n.show());
+}
+
+/** P4: the newest transcript that exists. */
+async function openLastTranscript(): Promise<void> {
+  const id = lastCall(await currentRows()).transcriptId;
+  const folder = id ? callFolder(id) : null;
+  const file = folder && id ? join(folder, `${id}.transcript.md`) : null;
+  if (file && existsSync(file)) await shell.openPath(file);
+}
+
+// ---- P3: the floating bar follows the saved call ----
+function sendFollow(view: ReturnType<typeof followView> | null): void {
+  if (barWin && !barWin.isDestroyed()) barWin.webContents.send(IPC.followToBar, view);
+}
+
+function startFollow(id: string | null): void {
+  if (followHideTimer) clearTimeout(followHideTimer);
+  followHideTimer = null;
+  followId = id;
+  followSince = Date.now();
+}
+
+function clearFollow(): void {
+  if (followHideTimer) clearTimeout(followHideTimer);
+  followHideTimer = null;
+  followId = null;
+  sendFollow(null);
+  if (barWin && !barWin.isDestroyed() && !controller?.guard.isActive) barWin.hide();
+}
+
+function updateFollow(rows: CallRow[]): void {
+  if (!followId || controller?.guard.isActive) return;
+  const row = rows.find((r) => r.id === followId);
+  if (!row && Date.now() - followSince > FOLLOW_UNQUEUED_MS) return clearFollow();
+  const view = followView(row);
+  sendFollow(view);
+  if (barWin && !barWin.isDestroyed() && !barWin.isVisible()) barWin.showInactive();
+  if (view.final && !followHideTimer) followHideTimer = setTimeout(clearFollow, FOLLOW_FINAL_MS);
+  if (!view.final && followHideTimer) {
+    clearTimeout(followHideTimer);
+    followHideTimer = null;
+  }
 }
 
 function showWizard(): void {
@@ -450,8 +557,10 @@ async function smokeNetwork(): Promise<boolean> {
 function onStateChange(state: RecorderState): void {
   tray?.update(state);
   if (!barWin || barWin.isDestroyed()) return;
-  if (state === "idle") barWin.hide();
-  else if (!barWin.isVisible()) barWin.showInactive();
+  if (state === "idle") {
+    if (followId) void refreshCallViews();
+    else barWin.hide();
+  } else if (!barWin.isVisible()) barWin.showInactive();
 }
 
 function wireRecorderWindow(win: BrowserWindow): void {
@@ -472,6 +581,11 @@ function wireRecorderWindow(win: BrowserWindow): void {
   });
 }
 
+/** P2: put the recorder window away (tray); the floating bar stays. */
+function hideRecorder(): void {
+  if (recorderWin && !recorderWin.isDestroyed() && recorderWin.isVisible()) recorderWin.hide();
+}
+
 function showRecorder(): void {
   if (!recorderWin || recorderWin.isDestroyed()) return;
   if (recorderWin.isMinimized()) recorderWin.restore();
@@ -480,7 +594,9 @@ function showRecorder(): void {
 }
 
 function notify(title: string, body: string): void {
-  if (Notification.isSupported()) new Notification({ title, body, silent: true }).show();
+  if (!Notification.isSupported()) return;
+  const n = new Notification({ title, body, silent: true });
+  showLater(() => n.show());
 }
 
 /**
@@ -669,11 +785,7 @@ function registerIpc(c: RecorderController): void {
   });
 
   // Recent calls.
-  handle(IPC.listCalls, async () => {
-    const list = jobs?.list() ?? [];
-    const transcriptIds = new Set(list.filter((j) => existsSync(join(j.folder, `${j.id}.transcript.md`))).map((j) => j.id));
-    return callRows(list, { hasKey: !!(await secrets?.getGeminiKey()), transcriptIds });
-  });
+  handle(IPC.listCalls, () => currentRows());
   handle(IPC.retryCall, async (id) => {
     if (typeof id === "string") await jobs?.retry(id);
   });
@@ -716,13 +828,25 @@ function registerIpc(c: RecorderController): void {
   ipcMain.on(IPC.status, (event, status: StatusReport) => {
     if (!fromOwnPage(event) || event.sender !== recorderWin?.webContents) return;
     if (status?.state === "recording") c.noteCaptureStarted();
+    // P3: the bar follows the call being saved; a new recording replaces the follow-up.
+    if (status?.state === "stopping" && c.activeCallId && followId !== c.activeCallId) startFollow(c.activeCallId);
+    if ((status?.state === "starting" || status?.state === "recording") && followId) {
+      startFollow(null);
+      sendFollow(null);
+    }
     if (status?.state === "stopping") c.noteStopping();
+    // P2: hide the window once a Solace start records; show it if that start failed.
+    const act = status?.state ? linkWindow.status(status.state) : null;
+    if (act === "hide") hideRecorder();
+    else if (act === "show") showRecorder();
     if (barWin && !barWin.isDestroyed()) barWin.webContents.send(IPC.statusToBar, status);
   });
   ipcMain.on(IPC.barCommand, (event, cmd: unknown) => {
     if (!fromOwnPage(event)) return;
     if (cmd === "open") showRecorder();
     else if (cmd === "pause" || cmd === "resume" || cmd === "stop") command(cmd);
+    else if (cmd === "close") clearFollow();
+    else if (cmd === "retry" && followId) void jobs?.retry(followId);
   });
 }
 

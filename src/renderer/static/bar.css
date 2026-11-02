@@ -118,6 +118,56 @@ button:disabled {
   display: none !important;
 }
 
+/* P3 (UX round 2): live = recording; follow = after Stop, the saved call's stage */
+body[data-mode="live"] .follow,
+body[data-mode="follow"] .live {
+  display: none !important;
+}
+
+.chip {
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 3px;
+  padding: 0 5px;
+  white-space: nowrap;
+  flex: none;
+}
+
+.chip.linked {
+  background: #166534;
+  color: #fff;
+}
+
+.chip.local {
+  background: #b45309;
+  color: #fff;
+}
+
+.follow-title {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.follow-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+
+body[data-mode="follow"][data-final="true"] .dot {
+  background: #22c55e;
+}
+
+body[data-mode="follow"][data-failed="true"] .dot {
+  background: #ef4444;
+}
+
+button.close {
+  padding: 5px 8px;
+}
+
 /* D-165: Test mode badge */
 .test-badge {
   font-size: 10px;

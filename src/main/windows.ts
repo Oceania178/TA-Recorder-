@@ -3,7 +3,7 @@ import { BrowserWindow, screen } from "electron";
 import { join } from "node:path";
 import type { Command } from "./ipcTypes";
 
-const BAR_WIDTH = 384;
+const BAR_WIDTH = 452;
 const BAR_HEIGHT = 52;
 
 function webPreferences(preload: string): Electron.WebPreferences {
@@ -66,8 +66,8 @@ export function createBarWindow(rendererDir: string, preload: string): BrowserWi
  * Runs a recorder command inside the recorder page as if the user clicked: getDisplayMedia (system audio)
  * needs a user gesture, and commands from the tray or a shortcut have none. Only fixed command names go in.
  */
-export function sendCommandToRecorder(win: BrowserWindow, command: Command | "settings"): void {
-  const allowed: readonly string[] = ["start", "startLinked", "stop", "pause", "resume", "settings"];
+export function sendCommandToRecorder(win: BrowserWindow, command: Command | "settings" | "calls"): void {
+  const allowed: readonly string[] = ["start", "startLinked", "stop", "pause", "resume", "settings", "calls"];
   if (!allowed.includes(command)) return;
   if (win.isDestroyed()) return;
   const name = JSON.stringify(command);

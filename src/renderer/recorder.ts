@@ -10,6 +10,7 @@ import { initSettingsPanel, renderSettingsPanel } from "./settingsPanel";
 import { SilenceWatch } from "./silenceWatch";
 import { LONG_CALL_STOPPED, LONG_CALL_WARNING, longCallStatus } from "./longCall";
 import { initWizard, openWizard } from "./wizard";
+import { isInCall } from "./inCall";
 import { folderBanner, isStaleNoticeMessage, NOTICE_FIRST_MESSAGE, startHint, startIsPrimary } from "./recorderCopy";
 
 const TICK_MS = 200;
@@ -25,6 +26,8 @@ let chains: Record<Track, Promise<void>> = { stereo: Promise.resolve(), left: Pr
 let settings: SettingsView | null = null;
 let levels: [number, number] = [0, 0];
 let warning: string | null = null;
+/** P3: the call being recorded is linked to Solace; null while idle. */
+let linkedNow: boolean | null = null;
 const clock = new ElapsedClock();
 const silence = [new SilenceWatch({ limitMs: SILENCE_LIMIT_MS, threshold: SILENCE_THRESHOLD }), new SilenceWatch({ limitMs: SILENCE_LIMIT_MS, threshold: SILENCE_THRESHOLD })];
 
@@ -55,6 +58,7 @@ function showLinkState(linked: boolean | null): void {
 function setState(next: RecorderState): void {
   state = next;
   document.body.dataset.state = next;
+  document.body.classList.toggle("in-call", isInCall(next));
   $("status").textContent = STATUS_TEXT[next];
   ($("btn-start") as HTMLButtonElement).disabled = next !== "idle" || !!settings?.dirProblem;
   ($("btn-pause") as HTMLButtonElement).disabled = next !== "recording" && next !== "paused";
@@ -67,7 +71,7 @@ function setState(next: RecorderState): void {
 }
 
 function report(): void {
-  api().reportStatus({ state, elapsedMs: clock.elapsed(performance.now()), levels, warning, testMode: settings?.testMode === true });
+  api().reportStatus({ state, elapsedMs: clock.elapsed(performance.now()), levels, warning, testMode: settings?.testMode === true, linked: linkedNow });
 }
 
 function micSettings(on: boolean) {
@@ -133,6 +137,7 @@ async function start(intent: "local" | "linked" = "local"): Promise<void> {
   clock.start(now);
   silence.forEach((s) => s.reset(now));
   warning = null;
+  linkedNow = begin.linked;
   setState("recording");
   showLinkState(begin.linked);
   showMessage(
@@ -180,6 +185,7 @@ async function stop(): Promise<void> {
   callId = null;
   levels = [0, 0];
   warning = null;
+  linkedNow = null;
   clock.reset();
   setState("idle");
   showLinkState(null);
@@ -234,10 +240,13 @@ async function refreshDevices(): Promise<void> {
     const warn = $("device-warning");
     warn.textContent = result.warnings.join(" ");
     warn.hidden = result.warnings.length === 0;
+    // P1: a device warning keeps Device check on screen during a call.
+    $("devices").classList.toggle("has-warning", result.warnings.length > 0);
   } catch {
     $("device-recorded").textContent = "unknown";
     $("device-warning").textContent = "The device list could not be read. Press Check again; if it stays, restart the app.";
     $("device-warning").hidden = false;
+    $("devices").classList.add("has-warning");
   }
 }
 
@@ -278,6 +287,7 @@ function runCommand(cmd: string): void {
   else if (cmd === "pause") void pause();
   else if (cmd === "resume") void resume();
   else if (cmd === "settings") $("settings").scrollIntoView({ behavior: "smooth" });
+  else if (cmd === "calls") $("calls").scrollIntoView({ behavior: "smooth" });
 }
 
 async function init(): Promise<void> {

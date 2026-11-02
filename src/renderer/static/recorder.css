@@ -493,6 +493,11 @@ summary:focus-visible {
   color: var(--text);
 }
 
+/* P1 (UX round 2): a compact "in call" layout. Device check stays when it has a warning. */
+body.in-call .fold-in-call:not(.has-warning) {
+  display: none;
+}
+
 /* a small button inside a message: "Open Settings" */
 button.inline {
   padding: 2px 8px;

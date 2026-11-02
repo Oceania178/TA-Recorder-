@@ -439,7 +439,8 @@ describe("second instance", () => {
     expect(seen).toEqual(["log:second_instance.sweep:{}", "sweep"]);
     seen.length = 0;
     handleSecondInstance(["app.exe", link()], deps);
-    expect(seen).toEqual(["log:second_instance.link:{}", `link:${link().length}`, "show"]);
+    // UX round 2 (P2): a link does not bring the window forward by itself; the outcome decides (a refusal shows it).
+    expect(seen).toEqual(["log:second_instance.link:{}", `link:${link().length}`]);
     expect(seen.join(" ")).not.toContain(LINK_TICKET);
     seen.length = 0;
     handleSecondInstance(["app.exe"], deps);

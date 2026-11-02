@@ -6,19 +6,24 @@
     <title>TA Call Recorder bar</title>
     <link rel="stylesheet" href="bar.css" />
   </head>
-  <body data-state="idle">
+  <body data-state="idle" data-mode="live">
     <div class="bar" id="bar">
       <span class="dot" aria-hidden="true"></span>
-      <span class="timer" id="timer" role="timer" aria-label="Recorded time">00:00:00</span>
-      <span class="test-badge" id="test-mode-badge" title="Test mode: Local only, never sent to Solace" hidden>TEST</span>
-      <div class="meters" aria-hidden="true" title="Top: you (mic). Bottom: the other side.">
+      <span class="live timer" id="timer" role="timer" aria-label="Recorded time">00:00:00</span>
+      <span class="follow follow-title" id="follow-title"></span>
+      <span class="chip" id="call-chip" hidden></span>
+      <span class="live test-badge" id="test-mode-badge" title="Test mode: Local only, never sent to Solace" hidden>TEST</span>
+      <div class="live meters" aria-hidden="true" title="Top: you (mic). Bottom: the other side.">
         <div class="meter"><div class="fill left" id="meter-left"></div></div>
         <div class="meter"><div class="fill right" id="meter-right"></div></div>
       </div>
-      <span class="warn" id="warn" role="img" aria-label="Warning: check the recorder window" title="Check the recorder window" hidden>!</span>
-      <button id="btn-pause" type="button">Pause</button>
-      <button id="btn-stop" class="stop" type="button">Stop</button>
+      <span class="live warn" id="warn" role="img" aria-label="Warning: check the recorder window" title="Check the recorder window" hidden>!</span>
+      <span class="follow follow-text" id="follow-text" role="status"></span>
+      <button class="live" id="btn-pause" type="button">Pause</button>
+      <button class="live stop" id="btn-stop" type="button">Stop</button>
+      <button class="follow" id="btn-retry" type="button" hidden>Retry</button>
       <button id="btn-open" class="open" type="button" title="Open the recorder" aria-label="Open the recorder">⤢</button>
+      <button class="follow close" id="btn-close" type="button" title="Close the bar" aria-label="Close the bar">✕</button>
     </div>
     <script src="bar.js"></script>
   </body>

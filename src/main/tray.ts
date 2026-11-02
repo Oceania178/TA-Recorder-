@@ -1,19 +1,11 @@
-// The tray icon (grey idle, red recording, amber paused) and its menu: Start / Pause / Stop / Open / Settings / Quit.
-import { Menu, nativeImage, Tray } from "electron";
+// The tray icon (grey idle, red recording, amber paused) and its menu (trayMenu.ts): Start / Pause / Stop, the last
+// call's stage and "Open last transcript" (UX round 2, P4), Open / Settings / Set-up check / Quit.
+import { Menu, nativeImage, Tray, type MenuItemConstructorOptions } from "electron";
 import type { RecorderState } from "./ipcTypes";
-import { SHORTCUTS } from "./shortcuts";
 import { dotBitmap, trayColourFor, trayTooltip } from "./trayIcon";
+import { trayMenuItems, type LastCall, type TrayAction } from "./trayMenu";
 
-export interface TrayActions {
-  start(): void;
-  pauseOrResume(): void;
-  stop(): void;
-  open(): void;
-  settings(): void;
-  /** The first-run wizard again (D-132). */
-  wizard(): void;
-  quit(): void;
-}
+export type TrayActions = Record<TrayAction, () => void>;
 
 function iconFor(state: RecorderState): Electron.NativeImage {
   const colour = trayColourFor(state);
@@ -26,6 +18,7 @@ export class RecorderTray {
   private readonly tray: Tray;
   private state: RecorderState = "idle";
   private testMode = false;
+  private last: LastCall = { line: "No calls yet", transcriptId: null };
 
   constructor(private readonly actions: TrayActions) {
     this.tray = new Tray(iconFor("idle"));
@@ -39,23 +32,27 @@ export class RecorderTray {
     this.tray.setToolTip(trayTooltip(this.state, this.testMode));
   }
 
+  /** P4: the newest call's stage line and the newest transcript (rebuilt when Recent calls changes). */
+  setLastCall(last: LastCall): void {
+    if (last.line === this.last.line && last.transcriptId === this.last.transcriptId) return;
+    this.last = last;
+    this.buildMenu();
+  }
+
   update(state: RecorderState): void {
     this.state = state;
     this.tray.setImage(iconFor(state));
     this.tray.setToolTip(trayTooltip(state, this.testMode));
-    const active = state === "recording" || state === "paused";
-    const menu = Menu.buildFromTemplate([
-      { label: `Start recording (${SHORTCUTS.toggleRecord.label})`, enabled: state === "idle", click: () => this.actions.start() },
-      { label: `${state === "paused" ? "Resume" : "Pause"} (${SHORTCUTS.togglePause.label})`, enabled: active, click: () => this.actions.pauseOrResume() },
-      { label: `Stop and save (${SHORTCUTS.toggleRecord.label})`, enabled: active, click: () => this.actions.stop() },
-      { type: "separator" },
-      { label: "Open recorder", click: () => this.actions.open() },
-      { label: "Settings", click: () => this.actions.settings() },
-      { label: "Set-up check…", enabled: state === "idle", click: () => this.actions.wizard() },
-      { type: "separator" },
-      { label: "Quit", click: () => this.actions.quit() },
-    ]);
-    this.tray.setContextMenu(menu);
+    this.buildMenu();
+  }
+
+  private buildMenu(): void {
+    const template: MenuItemConstructorOptions[] = trayMenuItems(this.state, this.last).map((item) => {
+      if ("type" in item) return { type: "separator" };
+      const action = item.action;
+      return { label: item.label, enabled: item.enabled, click: action ? () => this.actions[action]() : undefined };
+    });
+    this.tray.setContextMenu(Menu.buildFromTemplate(template));
   }
 
   notifyOnce(title: string, content: string): void {
