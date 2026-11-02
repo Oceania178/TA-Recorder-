@@ -9,6 +9,8 @@
 //   development build (--inspect, 127.0.0.1 only). The renderer is driven through the debugging port, with the
 //   page's own buttons. shell.openExternal is stubbed in the main process, so "Test dial" and "Open Windows
 //   microphone settings" open nothing. The wizard's mic / sound checks get fake streams (an oscillator).
+// - UX round 2: Windows notifications are not shown; their title and text are logged (Notification.prototype.show
+//   is replaced in the main process). The tray menu is native and is covered by unit tests, not screenshots.
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdirSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
@@ -76,6 +78,7 @@ async function startFakeSolace() {
       // The fake link ticket says what to answer: <kind>_<session id>_<3cx|self>_<padding>.
       const ticket = String(req.headers.authorization ?? "").replace(/^Bearer /, "");
       const [kind, session, mode] = ticket.split("_");
+      say(`fake Solace: ticket check (${kind}, ${session})`);
       if (kind === "refuse") return json(res, 401, { error: "invalid_ticket" });
       const offset = kind === "clock" ? 12 * 60_000 : 0;
       return json(res, 200, {
@@ -172,6 +175,7 @@ async function startApp(name, extraEnv = {}, extraArgs = []) {
   await waitFor("page ready", () => page.eval(`!!document.body.dataset.state && document.getElementById("status").textContent === "Ready"`), 30_000);
   // Nothing opens outside the app: Test dial and the Windows settings button become no-ops.
   await main.eval(`(() => { const e = require("electron"); e.shell.openExternal = async () => undefined; e.shell.openPath = async () => ""; return true; })()`);
+  await main.eval(`(() => { const N = require("electron").Notification; globalThis.__uxNotes = []; N.prototype.show = function () { globalThis.__uxNotes.push({ title: this.title, body: this.body }); }; return true; })()`);
   await sleep(800);
 }
 async function stopApp() {
@@ -222,6 +226,13 @@ async function shot(name, { which = "recorder", full = true } = {}) {
   say(`shot ${name}: ${r}`);
 }
 
+/** The recorder window: visible or not (P2), and bring it back as the bar's open button does. */
+const windowVisible = () => main.eval(`require("electron").BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes("recorder.html"))?.isVisible() ?? null`);
+const barVisible = () => main.eval(`require("electron").BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes("bar.html"))?.isVisible() ?? null`);
+async function showWindow() {
+  await main.eval(`(() => { const w = require("electron").BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes("recorder.html")); w.show(); return true; })()`);
+  await sleep(500);
+}
 const click = (id) => page.eval(`document.getElementById(${JSON.stringify(id)}).click(), true`);
 const setValue = (id, v) => page.eval(`(() => { const e = document.getElementById(${JSON.stringify(id)}); e.value = ${JSON.stringify(v)}; e.dispatchEvent(new Event("input")); return true; })()`);
 const text = (id) => page.eval(`document.getElementById(${JSON.stringify(id)}).textContent`);
@@ -359,14 +370,14 @@ async function firstRun() {
   await waitFor("recording", async () => (await state()) === "recording", 30_000, 50);
   say(`time to start: Start pressed → recording in ${Date.now() - tLocal} ms`);
   await sleep(3000);
-  await shot("main-recording-local", { full: false });
+  await shot("main-recording-local");
   await shot("bar-recording-test-mode", { which: "bar" });
   await cmd("start"); // busy
   await sleep(400);
   await shot("refusal-busy", { full: false });
   await cmd("pause");
   await sleep(800);
-  await shot("main-paused", { full: false });
+  await shot("main-paused");
   await shot("bar-paused", { which: "bar" });
   await cmd("resume");
   await sleep(500);
@@ -382,6 +393,7 @@ async function firstRun() {
   await sleep(1500);
   await shot("main-saved", { full: false });
   await shot("calls-recorded-no-key");
+  await shot("bar-follow-waiting-key", { which: "bar" });
 
   // Key set (fake), the waiting call is transcribed: Local only.
   gemini.mode = "ok";
@@ -389,7 +401,10 @@ async function firstRun() {
   await click("btn-key-save");
   await waitStage((r) => r.detail?.startsWith("Local only"), "local only transcribed");
   await sleep(800);
+  await shot("bar-follow-local", { which: "bar" });
   await shot("settings-key-set-test-on");
+  await sleep(6500);
+  say(`P3: bar after a Local only call is transcribed, 6.5 s later: visible=${await barVisible()}`);
 
   // Linked call: Transcribing (Gemini hangs) → Sending (Solace hangs) → Sent.
   gemini.mode = "hang";
@@ -399,32 +414,42 @@ async function firstRun() {
   await waitFor("linked recording", async () => (await state()) === "recording", 30_000, 50);
   say(`time to start: Solace link handed to Windows → recording in ${Date.now() - tLink} ms (includes the ~1.2 s pause after the second process)`);
   await sleep(2500);
-  await shot("main-recording-linked", { full: false });
+  say(`P2: recorder window visible after the Solace start: ${await windowVisible()} (expected false); bar visible: ${await barVisible()}`);
   await shot("bar-recording-linked", { which: "bar" });
+  await showWindow();
+  await shot("main-recording-linked");
   // Busy: a link while a call is recorded.
   await sendLink(link("ok", "ux-session-busy-0002"));
   await sleep(500);
   await shot("refusal-busy-link", { full: false });
+  say(`P2: a refused link (busy) shows the window: visible=${await windowVisible()}`);
   await cmd("stop");
   await waitFor("idle", async () => (await state()) === "idle", 30_000, 200);
   await waitStage((r) => r.stage === "Transcribing", "transcribing");
   await sleep(600);
   await shot("calls-transcribing");
+  await shot("bar-follow-transcribing", { which: "bar" });
   gemini.mode = "ok";
   releaseGemini();
   await waitStage((r) => r.stage === "Sending", "sending");
   await sleep(600);
   await shot("calls-sending");
+  await shot("bar-follow-sending", { which: "bar" });
   solace.upload = "ok";
   releaseSolace();
   await waitStage((r) => r.stage === "Sent", "sent");
+  await sleep(500);
+  await shot("bar-follow-sent", { which: "bar" });
+  await sleep(6500);
+  say(`P3: bar 7 s after Sent: visible=${await barVisible()} (expected false)`);
 
   // Transcribed, waiting to send (Solace busy).
   solace.upload = "busy";
   await sendLink(link("ok", "ux-session-wait-0003", "self_dial"));
   await waitFor("self-dial recording", async () => (await state()) === "recording", 30_000, 200);
   await sleep(1500);
-  await shot("main-recording-self-dial", { full: false });
+  await showWindow();
+  await shot("main-recording-self-dial");
   await sleep(1500);
   await cmd("stop");
   await waitFor("idle", async () => (await state()) === "idle", 30_000, 200);
@@ -436,6 +461,8 @@ async function firstRun() {
   await recordFor(3000);
   await waitStage((r) => r.stage === "Failed", "failed", 90_000);
   await sleep(800);
+  await shot("bar-follow-failed", { which: "bar" });
+  await showWindow();
   await shot("calls-all-stages");
 
   // Refusals from links: bad link, refused ticket, clock warning.
@@ -449,6 +476,7 @@ async function firstRun() {
   await sendLink(link("clock", "ux-session-clock-0006"));
   await waitFor("clock recording", async () => (await state()) === "recording", 30_000, 200);
   await sleep(2500);
+  await showWindow();
   await shot("warning-clock", { full: false });
   await cmd("stop");
   await waitFor("idle", async () => (await state()) === "idle", 30_000, 200);
@@ -458,6 +486,7 @@ async function firstRun() {
   await click("test-mode");
   await sleep(600);
   await shot("settings-key-set-test-off");
+  say(`P11 notifications shown: ${JSON.stringify(await main.eval("globalThis.__uxNotes"))}`);
   await stopApp();
 }
 
