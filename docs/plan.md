@@ -174,7 +174,8 @@ wizard); `npm run selftest:audio` (also decodes the left file the way transcript
   resource, and `electronFuses` does not exist in electron-builder 25) (M11); Gemini and Solace calls use
   Chromium's network stack (`net.fetch` in its own session: Windows proxy and certificate store) (M12).
 - **Clock:** when Solace's `server_time` differs from the laptop by more than 2 minutes the window warns "Your
-  laptop clock is off by N min — fix Windows time, Solace may reject the call".
+  laptop clock is off by N min, so Solace may reject the call. Fix it in Windows Settings → Time & language →
+  Date & time → Sync now." (wording from the UX pass, 02/11/2026).
 - **Contract lock:** a test runs an app-built payload through Solace's own `validateTranscriptUpload`
   (read-only import from the Solace worktree; skipped where that worktree is absent).
 
@@ -316,3 +317,27 @@ unchanged apart from that move. **Rerun `npm run selftest:audio` once with the r
 
 ## Installer 0.1.3 (controller, 02/11/2026)
 - Notice wording set by Triet: "Calls are transcribed by Google Gemini. Tell the candidate at the start of the call that it is recorded." Spec v1.26 (D-32 and D-74 dropped).
+
+## UX pass 02/11/2026 (UX-APP)
+UI only: nothing about capture, files, queue, transcription, sending, retention, security, the notice gate,
+Test mode or the contract changed. Full report: Solace repo `.superpowers/sdd/2026-10-16-call-recorder-batch2/UX-APP-report.md`.
+- **Screenshots of every state:** `node scripts/ux/screens.mjs <folder>` (development build, throwaway profile,
+  `--dev --e2e --e2e-audio`, fake Solace and fake Gemini on 127.0.0.1:4290/4291, `webContents.capturePage`
+  through the main-process inspector; nothing opens outside the app). Before / after sets:
+  `C:\Users\LAP15911\solace-worktrees\logs\ux-app\before\` and `...\after\` (44 each).
+- **What changed for the TA:**
+  - under Start, the next step: Test mode off → press "Call & record" (or "Record only, I'll call myself") in
+    Solace; Test mode on → Start / tray / Ctrl+Alt+R record a "Local only" call. Start is blue only in Test mode;
+  - "Open Set-up check and accept the notice first." goes away once the notice is accepted;
+  - a recordings-folder problem (OneDrive, network, disconnected drive) shows next to Start with "Open Settings";
+    the no-key banner has "Open Settings" too;
+  - clock warning names the Windows setting; "Waiting to try again" says nothing is needed; Retry shows "Retrying…";
+  - red text #b91c1c and amber badges #b45309 (WCAG AA 4.5:1), a focus ring, Transcribing / Sending tinted blue;
+  - set-up check: current step marked (`aria-current`), results announced (`role=status`), focus moves into it,
+    Esc = Later (still not "I understand", D-162), Tab stays inside;
+  - floating bar 384 px wide (was 340: with TEST and the warning, the open button was cut off); labels for its
+    icon-only parts.
+- **Tests:** `tests/app/uxPass.test.ts` (13, red first). 394/394; typecheck, smoke, `selftest:audio` and the
+  E2E run (11/11) pass.
+- **Big ideas, not built (need Triet):** see the report: a compact "in call" layout, the last call's stage in the
+  tray menu, configurable shortcuts, auto-start when 3CX rings, a transcript preview, a short onboarding video.
