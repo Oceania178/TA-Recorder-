@@ -311,5 +311,8 @@ unchanged apart from that move. **Rerun `npm run selftest:audio` once with the r
 - Packaged exe: `--smoke --smoke-capture --smoke-crash` pass (real mic + loopback, 3 files at 4.98 s, crash recovery). E2E script (dev build): 11/11 steps pass.
 
 ## Installer 0.1.2 (controller, 02/11/2026)
-- Legal temporarily allows Google API (Gemini) for this project (spec v1.25, D-168). The first-run notice now reads: "Calls are transcribed by Google Gemini (approved for this project by Legal, for now). Tell the candidate at the start of the call that it is recorded." (was "Use with role-play calls only until Legal approves real candidates").
+- Legal temporarily allows Google API (Gemini) for this project (spec v1.25, D-168). The first-run notice now reads: "Calls are transcribed by Google Gemini (approved for this project by Legal, for now). …" — replaced in 0.1.3 (was "Use with role-play calls only until Legal approves real candidates").
 - 381/381 tests, smoke OK; `release\TA Call Recorder Setup 0.1.2.exe`.
+
+## Installer 0.1.3 (controller, 02/11/2026)
+- Notice wording set by Triet: "Calls are transcribed by Google Gemini. Tell the candidate at the start of the call that it is recorded." Spec v1.26 (D-32 and D-74 dropped).
