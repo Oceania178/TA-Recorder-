@@ -309,3 +309,7 @@ unchanged apart from that move. **Rerun `npm run selftest:audio` once with the r
 ## Installer 0.1.1 (controller, 30/10/2026)
 - Version 0.1.1 = everything above plus D-165 Test mode and the v1.24 spec. `release\TA Call Recorder Setup 0.1.1.exe` (81.8 MB, unsigned). Installing over 0.1.0 is an update: recordings, settings and key are kept.
 - Packaged exe: `--smoke --smoke-capture --smoke-crash` pass (real mic + loopback, 3 files at 4.98 s, crash recovery). E2E script (dev build): 11/11 steps pass.
+
+## Installer 0.1.2 (controller, 02/11/2026)
+- Legal temporarily allows Google API (Gemini) for this project (spec v1.25, D-168). The first-run notice now reads: "Calls are transcribed by Google Gemini (approved for this project by Legal, for now). Tell the candidate at the start of the call that it is recorded." (was "Use with role-play calls only until Legal approves real candidates").
+- 381/381 tests, smoke OK; `release\TA Call Recorder Setup 0.1.2.exe`.
