@@ -344,3 +344,52 @@ Test mode or the contract changed. Full report: Solace repo `.superpowers/sdd/20
 
 ## Installer 0.1.4 (controller, 02/11/2026)
 - 0.1.3 plus the UX pass of 02/11/2026 (16 small UI/UX fixes, no core change). 394/394 tests, E2E 11/11, selftest:audio OK.
+
+## UX round 2 (02/11/2026, approved by Triet: P1, P2, P3 + P11, P4)
+UI only: capture, files, queue, transcription, sending, retention, the notice gate, Test mode and the contract are
+unchanged. The version stays 0.1.4; the controller builds the installer.
+- **P1 compact "in call" layout:** while recording, paused or saving, Recent calls, Device check (unless it shows a
+  warning) and Settings fold away. The timer, meters, Pause / Stop, "Linked to Solace" / "Local only" and every
+  warning stay. Everything comes back after Stop.
+- **P2 Solace stays in front:** a call started from a Solace link hides the recorder window once it records; the
+  floating bar shows it, and its open button brings the window back. A refused or failed link brings the window
+  forward with the reason (no recording within 20 s also does). A second instance with a link no longer brings
+  the window forward by itself. A local (Test mode) start is unchanged. On a first launch from a link the window
+  starts hidden.
+- **P3 floating bar:** "Solace" or "Local only" for the call being recorded. After Stop it follows the call:
+  "Saved, transcribing next" / "Waiting for a Gemini key (Settings)" / "Transcribing…" / "Waiting to send (network
+  busy)" / "Sending to Solace…" / "Sent to Solace" / "Failed — open the recorder to see why" with **Retry** (the
+  same as Recent calls' Retry). It hides 6 s after Sent (or after a Local only call is transcribed), or when the
+  TA presses ✕. Bar 452 px wide.
+- **P11 notifications:** one per Solace call when it becomes Sent ("Call of 14:05 sent to Solace.") or Failed
+  ("Call of 14:05 could not be sent to Solace. Open TA Call Recorder to see why."). Time only: no name, path,
+  ticket or text. Clicking opens the window on Recent calls. None for Local only calls, none for calls already
+  Sent / Failed when the app starts, never twice for the same call and outcome.
+- **P4 tray menu:** a disabled line "Last call (hh:mm): <stage>" ("No calls yet" when empty) and "Open last
+  transcript" (the newest `.transcript.md` that exists; disabled when none). No Test mode switch in the tray.
+- **Crash fixed on the way (also in 0.1.4):** with Electron 33 on Windows, showing a notification while the app
+  handles a second instance (a Solace link refused at once, e.g. "already recorded") crashed the app when any
+  notification had been shown before (exit 0xFFFF7003; the E2E run hit it after the new Sent notification).
+  Every notification is now shown 50 ms later (`src/main/showLater.ts`); a probe that crashed every time now
+  survives.
+- **Code:** `src/renderer/inCall.ts`, `src/main/linkWindow.ts`, `src/main/barFollow.ts`, `src/renderer/barText.ts`,
+  `src/main/callOutcomes.ts`, `src/main/trayMenu.ts`, `src/main/showLater.ts`; wiring in `main.ts`, `tray.ts`,
+  `bar.*`, `recorder.*`. Tests: `tests/app/uxRound2.test.ts` (19, red first). 413/413; typecheck, smoke,
+  `selftest:audio` and the E2E run (11/11) pass. Screenshots: `C:\Users\LAP15911\solace-worktrees\logs\ux-app\after\`
+  (50, incl. `bar-follow-*.png`).
+
+### Hand tests for Triet (round 2)
+1. Solace → "Call & record" on a role-play candidate with the app open: the recorder window goes away, Solace
+   stays in front, the bar shows the timer and **Solace**. Press the bar's ⤢: the window comes back, compact
+   (no Recent calls / Device check / Settings). Stop: everything is back.
+2. After Stop, the bar shows "Call of hh:mm" and the stage until **Sent to Solace**, then disappears after a few
+   seconds. A Windows notification "Call of hh:mm sent to Solace." appears once; clicking it opens Recent calls.
+3. Turn Wi-Fi off before a call is sent: the bar says "Waiting to send (network busy)". With a wrong Gemini key the
+   bar says "Failed — …" with **Retry**, and a notification says it could not be sent. Fix the key, press Retry on
+   the bar: the stage moves on as in Recent calls.
+4. Press "Call & record" again for a call that was already recorded: the window comes forward with "This Solace
+   call has already been recorded…", and the app keeps running (the crash fix). Do it twice in a row.
+5. Right-click the tray icon: "Last call (hh:mm): Sent" (disabled) and "Open last transcript" open the newest
+   transcript. With no calls: "No calls yet", Open last transcript greyed out. There is no Test mode item.
+6. Test mode on, Ctrl+Alt+R: the window behaves as before (it is not hidden); the bar shows **Local only**; after
+   Stop, "Transcribed (Local only)" and no notification.
