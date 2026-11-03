@@ -509,3 +509,16 @@ leaves the laptop except to Gemini, as for a live call (D-139); no Solace change
   over 2 hours → refused at once, the live recording keeps going; (11) during a Solace call, Import → pick a broken
   file → Import → the message says the Solace recording was discarded; then, in Test mode, import a role-play file →
   it is "Local only", never in that candidate's profile.
+
+### Import recording — fix round 2 (review R3-2, 03/11/2026)
+- **F1:** WAV, Ogg, WebM and M4A headers must give 4 000–192 000 Hz and 1–8 channels (a WAV also a block size that
+  matches its channels and bits); anything else is "can't read" at the pick. The resampler refuses any other rate,
+  so no header can make its filter large (a 4 GHz WAV header used to freeze the main process for minutes).
+- **f2:** M4A sample / chunk tables are checked against the file size before anything is allocated.
+- **f3:** Ogg and plain M4A: the length is the larger of the header's and the packets'. Decoding also stops past
+  2 hours of output, whatever the header said ("longer than 2 hours").
+- **f4:** MP3: junk between frames is skipped to the next real frame; a real change of sample rate or mono / stereo
+  part-way is refused in plain words; an ID3v1 tag ends the file. An MP3 is never cut short silently.
+- **f5:** a file picked during a live Solace call whose call then ended (Stop or the 4 h cap) before Import: the
+  dialog says the call was saved and is sent to Solace as usual, and nothing is imported.
+- Tests: `tests/app/importFixRound2.test.ts` (11, red first). 490/490; typecheck, smoke, `selftest:audio`, E2E 12/12.
