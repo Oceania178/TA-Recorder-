@@ -4,7 +4,7 @@
 // 4-hour call) inside the call's own folder. Core's loadPcm reads them; they are deleted
 // after the transcript is written (and with the folder by the 3-day sweep in any case).
 // A decode writes to "<file>.part" and renames at the end, so a crash never leaves a half file that looks done.
-import { open, rename, rm, stat } from "node:fs/promises";
+import { open, readdir, rename, rm, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { DecodedCall, Job, PcmReader, PcmSource } from "../core";
@@ -14,6 +14,24 @@ export const PCM_SAMPLE_RATE = 16_000;
 export function pcmPaths(folder: string, id: string): { left: string; right: string } {
   return { left: join(folder, `${id}.left.s16`), right: join(folder, `${id}.right.s16`) };
 }
+
+/** D-171: the 16 kHz mono samples of a mono import. */
+export function monoPcmPath(folder: string, id: string): string {
+  return join(folder, `${id}.mono.s16`);
+}
+
+/** D-171: the copy "Import a recording" made (<id>.import.<ext>), or null. */
+export async function importCopyPath(folder: string, id: string): Promise<string | null> {
+  try {
+    const name = (await readdir(folder)).find((n) => n.startsWith(`${id}.import.`));
+    return name ? join(folder, name) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** D-171: decode an import copy again (a retry after the temp files were deleted). */
+export type RedecodeImport = (file: string, outDir: string, id: string) => Promise<void>;
 
 function webmPaths(folder: string, id: string): { left: string; right: string } {
   return { left: join(folder, `${id}.left.webm`), right: join(folder, `${id}.right.webm`) };
@@ -41,7 +59,7 @@ export async function deletePcmFiles(folder: string, id: string): Promise<void> 
   const p = pcmPaths(folder, id);
   // The .pcm names are the float32 files of builds before fix round 3.
   const old = [join(folder, `${id}.left.pcm`), join(folder, `${id}.right.pcm`)];
-  for (const f of [p.left, p.right, ...old]) {
+  for (const f of [p.left, p.right, monoPcmPath(folder, id), ...old]) {
     await rm(f, { force: true });
     await rm(`${f}.part`, { force: true });
   }
@@ -51,10 +69,17 @@ export async function deletePcmFiles(folder: string, id: string): Promise<void> 
 export type DecodeToFile = (webmFile: string, pcmFile: string) => Promise<void>;
 
 /** Decode each mono file that is not decoded yet (to "<file>.part", then renamed). False when audio is missing. */
-async function ensureDecoded(decode: DecodeToFile, job: Job): Promise<boolean> {
+async function ensureDecoded(decode: DecodeToFile, job: Job, redecodeImport?: RedecodeImport): Promise<boolean> {
   const webm = webmPaths(job.folder, job.id);
   const pcm = pcmPaths(job.folder, job.id);
-  if (!existsSync(webm.left) || !existsSync(webm.right)) return false;
+  // D-171: a stereo import is decoded when it is imported; a retry decodes its copy again.
+  if (existsSync(pcm.left) && existsSync(pcm.right)) return true;
+  if (!existsSync(webm.left) || !existsSync(webm.right)) {
+    const copy = redecodeImport ? await importCopyPath(job.folder, job.id) : null;
+    if (!copy || !redecodeImport) return false;
+    await redecodeImport(copy, job.folder, job.id);
+    return existsSync(pcm.left) && existsSync(pcm.right);
+  }
   for (const side of ["left", "right"] as const) {
     if (existsSync(pcm[side])) continue;
     const part = `${pcm[side]}.part`;
@@ -102,9 +127,9 @@ export async function openPcmReader(file: string): Promise<PcmReader & { close()
 }
 
 /** Core's openPcm: decode what is not decoded yet, then open both channels as readers. Null when audio is missing. */
-export function makeOpenPcm(decode: DecodeToFile): (job: Job) => Promise<PcmSource | null> {
+export function makeOpenPcm(decode: DecodeToFile, redecodeImport?: RedecodeImport): (job: Job) => Promise<PcmSource | null> {
   return async (job) => {
-    if (!(await ensureDecoded(decode, job))) return null;
+    if (!(await ensureDecoded(decode, job, redecodeImport))) return null;
     const pcm = pcmPaths(job.folder, job.id);
     const left = await openPcmReader(pcm.left);
     let right: PcmReader & { close(): Promise<void> };
@@ -141,4 +166,19 @@ function int16ToFloat(bytes: Uint8Array): Float32Array {
   const out = new Float32Array(ints.length);
   for (let i = 0; i < ints.length; i++) out[i] = ints[i] < 0 ? ints[i] / 0x8000 : ints[i] / 0x7fff;
   return out;
+}
+
+
+/** D-171: core/mono.ts's openMono — <id>.mono.s16 as a reader; decoded again from the import copy when gone. */
+export function makeOpenMono(redecodeImport?: RedecodeImport): (job: Job) => Promise<(PcmReader & { close(): Promise<void> }) | null> {
+  return async (job) => {
+    const file = monoPcmPath(job.folder, job.id);
+    if (!existsSync(file)) {
+      const copy = redecodeImport ? await importCopyPath(job.folder, job.id) : null;
+      if (!copy || !redecodeImport) return null;
+      await redecodeImport(copy, job.folder, job.id);
+      if (!existsSync(file)) return null;
+    }
+    return openPcmReader(file);
+  };
 }

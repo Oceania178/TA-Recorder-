@@ -17,8 +17,10 @@ import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
   JobQueue, QueueRunner, formatIsoWithOffset, sendJob, transcribeJob,
-  type DecodedCall, type FetchLike, type Job, type PcmSource, type StepOutcome,
+  type DecodedCall, type FetchLike, type Job, type PcmReader, type PcmSource, type StepOutcome,
 } from "../core";
+import { speakerPreview, type SpeakerChoice, type SpeakerPreview } from "../core/diarize";
+import { readSpeakersFile, transcribeMonoJob, writeChosenTranscript } from "../core/mono";
 import { sweepRoots } from "./inProgressSweep";
 import type { LinkedSession } from "./deepLinkFlow";
 
@@ -29,6 +31,9 @@ export interface SavedCall {
   startedAtMs: number;
   endedAtMs: number;
   session: LinkedSession | null;
+  /** D-171: an imported file; "mono" = both voices on one channel (speaker labels, then the TA's choice). */
+  audio?: "stereo" | "mono";
+  imported?: boolean;
 }
 
 export interface CallJobsDeps {
@@ -45,6 +50,8 @@ export interface CallJobsDeps {
   fetch: FetchLike;
   /** Decode the call's left and right files to 16 kHz PCM and open them as readers (APP review I3). */
   openPcm?(job: Job): Promise<PcmSource | null>;
+  /** D-171: a mono import's 16 kHz samples (pcmFiles.ts makeOpenMono). */
+  openMono?(job: Job): Promise<(PcmReader & { close?(): Promise<void> }) | null>;
   /** The older in-memory form (tests, short calls); used when openPcm is absent. */
   loadPcm?(job: Job): Promise<DecodedCall | null>;
   /** After the transcript is written: delete the temp PCM files. */
@@ -120,6 +127,17 @@ export class CallJobs {
       return { ok: false, retryable: true, retryAfterMs: NO_KEY_RECHECK_MS };
     }
     this.noKey = false;
+    if (job.audio === "mono") {
+      // D-171: both voices on one channel — speaker labels, then the TA's choice (core/mono.ts).
+      const mono = await transcribeMonoJob({
+        openMono: async (j) => (this.d.openMono ? this.d.openMono(j) : null),
+        getGeminiKey: async () => key,
+        getModel: () => this.d.getModel(),
+        gemini: { fetch: this.d.fetch, sleep: this.d.geminiSleep, random: this.d.random, now: this.d.now, maxAttempts: this.d.geminiMaxAttempts, endpoint: this.d.geminiEndpoint },
+        appVersion: this.d.appVersion,
+      }, job);
+      return mono;
+    }
     const outcome = await transcribeJob({
       openPcm: this.d.openPcm ? (j) => this.d.openPcm!(j) : undefined,
       loadPcm: this.d.loadPcm ? (j) => this.d.loadPcm!(j) : undefined,
@@ -154,6 +172,8 @@ export class CallJobs {
         startedAt: this.iso(call.startedAtMs),
         endedAt: this.iso(Math.max(call.endedAtMs, call.startedAtMs)),
         sendBy: call.session?.sendBy ?? null,
+        ...(call.audio === "mono" ? { audio: "mono" as const } : {}),
+        ...(call.imported ? { imported: true } : {}),
       });
       this.d.log?.("job.added", { id: call.id, linked: call.session !== null });
       this.d.onChange?.();
@@ -212,6 +232,32 @@ export class CallJobs {
     }
     this.d.onChange?.();
     await this.drain();
+  }
+
+  /** D-171: the first turns of each chunk of a mono import, for "Which voice is yours?"; null when none waits. */
+  async speakerPreview(id: string): Promise<SpeakerPreview | null> {
+    const j = this.queue.get(id);
+    if (!j || !j.speakersNeeded) return null;
+    const s = await readSpeakersFile(j.folder, j.id);
+    return s ? speakerPreview(s) : null;
+  }
+
+  /** D-171: the TA's voice choice → the transcript (ta / candidate), then the call goes on. False when refused. */
+  async chooseSpeakers(id: string, choice: SpeakerChoice): Promise<boolean> {
+    await this.idle();
+    const j = this.queue.get(id);
+    if (!j || j.stage !== "transcribed" || !j.speakersNeeded) return false;
+    try {
+      await writeChosenTranscript({ appVersion: this.d.appVersion }, j, choice);
+    } catch {
+      return false;
+    }
+    await this.queue.speakersChosen(id);
+    await this.d.afterTranscript?.(j).catch(() => undefined);
+    this.d.log?.("job.speakers_chosen", { id, swapped: Array.isArray(choice.swapped) ? choice.swapped.length : 0 });
+    this.d.onChange?.();
+    await this.drain();
+    return true;
   }
 
   /** The TA pressed Retry on a failed call. */
