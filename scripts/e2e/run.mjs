@@ -13,6 +13,27 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { connectPage } from "./cdp.mjs";
 import { startFakeGemini, startFakeLlm, startSolaceProxy, GEMINI_SCRIPT } from "./fakes.mjs";
+import { utimesSync } from "node:fs";
+
+/** D-171: a 16-bit PCM WAV of tone bursts (pitch, from s, to s) per channel — invented audio, no voice. */
+function toneWav(channels, seconds, rate = 48_000) {
+  const n = Math.round(seconds * rate);
+  const data = Buffer.alloc(n * channels.length * 2);
+  for (let i = 0; i < n; i++) {
+    const t = i / rate;
+    channels.forEach((bursts, c) => {
+      let v = 0;
+      for (const [hz, a, b] of bursts) if (t >= a && t < b) v += 0.5 * Math.sin(2 * Math.PI * hz * t);
+      data.writeInt16LE(Math.round(Math.max(-1, Math.min(1, v)) * 32767), (i * channels.length + c) * 2);
+    });
+  }
+  const h = Buffer.alloc(44);
+  h.write("RIFF", 0); h.writeUInt32LE(36 + data.length, 4); h.write("WAVE", 8); h.write("fmt ", 12);
+  h.writeUInt32LE(16, 16); h.writeUInt16LE(1, 20); h.writeUInt16LE(channels.length, 22); h.writeUInt32LE(rate, 24);
+  h.writeUInt32LE(rate * channels.length * 2, 28); h.writeUInt16LE(channels.length * 2, 32); h.writeUInt16LE(16, 34);
+  h.write("data", 36); h.writeUInt32LE(data.length, 40);
+  return Buffer.concat([h, data]);
+}
 
 // ---------- configuration ----------
 const APP_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -36,6 +57,8 @@ const DB_URL = `file:${DB_FILE.replace(/\\/g, "/")}`;
 const FILES_DIR = join(WORK, "solace-files");
 const USER_DATA = join(WORK, "app-userdata");
 const RECORDINGS = join(WORK, "recordings");
+/** D-171: the file "Import a recording" takes in this run (--e2e-import-file); rewritten before each import. */
+const IMPORT_FILE = join(WORK, "import", "phone-recording.wav");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 mkdirSync(LOGS, { recursive: true });
@@ -50,6 +73,7 @@ function say(msg) {
 const STEPS = {
   1: "Seed Solace", 2: "Create a session (3cx, self_dial)", 3: "Ticket check", 4: "Record", 5: "Transcribe", 6: "Send",
   7: "Solace shows it", 8: "Search and Sol", 9: "Local only (D-82)", 10: "Retention (D-140)", 11: "Time tracker",
+  12: "Import recording (D-171)",
 };
 const checks = [];
 function check(step, name, ok, evidence) {
@@ -148,7 +172,7 @@ async function login(email, name) {
 let app = null;
 let page = null;
 function appArgs(extra = []) {
-  return [APP_DIR, `--user-data-dir=${USER_DATA}`, "--dev", "--e2e", "--e2e-audio", `--e2e-gemini-endpoint=http://127.0.0.1:${PORT.gemini}`, `--remote-debugging-port=${PORT.cdp}`, "--hidden", ...extra];
+  return [APP_DIR, `--user-data-dir=${USER_DATA}`, "--dev", "--e2e", "--e2e-audio", `--e2e-gemini-endpoint=http://127.0.0.1:${PORT.gemini}`, `--e2e-import-file=${IMPORT_FILE}`, `--remote-debugging-port=${PORT.cdp}`, "--hidden", ...extra];
 }
 async function startApp(extra, label) {
   const out = createWriteStream(join(LOGS, `${label}.log`));
@@ -441,13 +465,69 @@ async function run() {
   const tt = await api("GET", `/api/call-recorder/time-tracker?from=${day}&to=${day}&ta=me`, { cookie: ta.cookie });
   check(11, "the call appears in the TA's time-tracker data for the period", tt.status === 200 && (tt.json?.summary?.screenings ?? 0) >= 1, { status: tt.status, screenings: tt.json?.summary?.screenings, excluded: tt.json?.summary?.excluded, table: tt.json?.summary?.table });
 
+  // ---- 12. Import recording (D-171): a stereo file and a mono file, each for a Solace call ----
+  const cand2 = await prisma.candidate.create({ data: { name: "Lê Văn Nhập", phone: "0900 000 002", owner_id: ta.id } });
+  const app2 = await prisma.application.create({ data: { job_code: JOB_CODE, candidate_id: cand2.id, current_stage: "phone_screen", owner_id: ta.id } });
+  const writeImport = (buf, hoursAgo) => {
+    mkdirSync(dirname(IMPORT_FILE), { recursive: true });
+    writeFileSync(IMPORT_FILE, buf);
+    const t = (Date.now() - hoursAgo * 3600_000) / 1000;
+    utimesSync(IMPORT_FILE, t, t);
+    return Math.round(t * 1000);
+  };
+  const importInApp = async (label) => {
+    await page.eval(`document.getElementById("btn-import").click(), true`);
+    await waitFor(`${label}: import dialog`, () => page.eval(`!document.getElementById("import-dialog").hidden`), 10_000, 200);
+    await page.eval(`document.getElementById("import-choose").click(), true`);
+    return waitFor(`${label}: import done`, async () => {
+      const s = await page.eval(`(() => { const e = document.getElementById("import-status"); return e.classList.contains("pass") || e.classList.contains("notyet") ? e.className + "|" + e.textContent : null; })()`);
+      return s;
+    }, 60_000, 300);
+  };
+  // 12a. stereo (left = TA, right = candidate), recorded two hours ago
+  const sD = await api("POST", "/api/call-recorder/sessions", { cookie: ta.cookie, body: { application_id: app2.id, dial_mode: "self_dial" } });
+  const D = sD.json?.session_id;
+  const mtimeD = writeImport(toneWav([[[330, 0.3, 1.8], [440, 4.2, 5.7]], [[660, 2.1, 3.6], [880, 6.3, 7.8]]], 8.5), 2);
+  await sendLinkToRunningApp(sD.json.deep_link);
+  await waitFor("D recording", async () => (await appState()) === "recording", 30_000, 200);
+  const importButtonD = await page.eval(`(() => { const b = document.getElementById("btn-import"); return b.hidden ? null : b.textContent; })()`);
+  const statusD = await importInApp("import D");
+  check(12, "during a live Solace call the window offers 'Import a recording instead…'; the stereo import is accepted", importButtonD === "Import a recording instead…" && /^wizard-status pass\|Imported\./.test(statusD), { button: importButtonD, status: statusD });
+  const jobD = await waitStage(D, ["sent", "failed"], 300_000);
+  const folderD = join(RECORDINGS, D);
+  const filesD = existsSync(folderD) ? readdirSync(folderD) : [];
+  const markerD = JSON.parse(readFileSync(join(folderD, "ta-call-recorder.call.json"), "utf8"));
+  check(12, "the live recording was replaced: the call folder holds the import copy and the marker (3 days from the import), no live .webm", filesD.includes(`${D}.import.wav`) && !filesD.some((f) => f.endsWith(".webm")) && Math.abs(Date.parse(markerD.ended_at) - Date.now()) < 10 * 60_000, filesD);
+  const recD = await prisma.callRecord.findUnique({ where: { session_id: D } });
+  const segD = JSON.parse(recD?.segments ?? "[]");
+  const repairsD = JSON.parse(recD?.repairs ?? "{}");
+  check(12, "stereo import sent with the session: left = ta, right = candidate, has_content true", jobD.stage === "sent" && recD?.application_id === app2.id && segD.length >= 2 && segD[0].speaker === "ta" && segD.some((t) => t.speaker === "candidate") && recD?.has_content === true, { stage: jobD.stage, speakers: segD.map((t) => t.speaker) });
+  check(12, "the file's own time is used (started_at = modified time − length) and Solace stores it, flagged clock_suspect (2 h before the session)", Math.abs(recD.started_at.getTime() - (mtimeD - 8500)) < 2000 && Math.abs(recD.ended_at.getTime() - mtimeD) < 2000 && repairsD.clock_suspect === true, { started_at: recD?.started_at, ended_at: recD?.ended_at, repairs: repairsD });
+  // 12b. mono (both voices on one channel), recorded ten minutes ago: speaker labels, then the TA's choice
+  const sE = await api("POST", "/api/call-recorder/sessions", { cookie: ta.cookie, body: { application_id: app2.id, dial_mode: "3cx" } });
+  const E = sE.json?.session_id;
+  writeImport(toneWav([[[330, 0.3, 2.5], [660, 3.0, 5.5], [440, 6.0, 8.0]]], 9), 10 / 60);
+  await sendLinkToRunningApp(sE.json.deep_link);
+  await waitFor("E recording", async () => (await appState()) === "recording", 30_000, 200);
+  const statusE = await importInApp("import E");
+  const waitingE = await waitStage(E, ["transcribed", "failed"], 300_000);
+  check(12, "a mono import is transcribed with speaker labels and waits for the TA's voice choice (nothing sent yet)", /Gemini now tells the two voices apart/.test(statusE) && waitingE.speakersNeeded === true && gemini.log.some((e) => e.kind === "diarize") && !(await prisma.callRecord.findUnique({ where: { session_id: E } })), { status: statusE, stage: waitingE.stage, speakersNeeded: waitingE.speakersNeeded });
+  await page.eval(`window.__taRecorderCommand("speakers"), true`);
+  await waitFor("voice dialog", () => page.eval(`!document.getElementById("speakers-dialog").hidden`), 10_000, 200);
+  const preview = await page.eval(`Array.from(document.querySelectorAll("#speakers-chunks li")).map((l) => l.textContent)`);
+  await page.eval(`document.querySelector('input[name="speaker-me"][value="A"]').click(), document.getElementById("speakers-send").click(), true`);
+  const jobE = await waitStage(E, ["sent", "failed"], 120_000);
+  const recE = await prisma.callRecord.findUnique({ where: { session_id: E } });
+  const segE = JSON.parse(recE?.segments ?? "[]");
+  check(12, "after 'My voice is A' the mono call is sent: A = ta, B = candidate, the salary sentence is the candidate's", jobE.stage === "sent" && segE.map((t) => t.speaker).join(",") === "ta,candidate,ta" && /30 triệu/.test(segE[1]?.text ?? "") && recE?.has_content === true, { preview, stage: jobE.stage, speakers: segE.map((t) => t.speaker) });
+
   // ---- 10. Retention: the app restarted with its clock 73 h ahead ----
   await stopApp();
   const before = callFolders();
   await startApp([`--e2e-clock-offset-ms=${RETENTION_OFFSET_MS}`], "app-run2-clock+73h");
   await waitFor("the sweep to delete the call folders", async () => callFolders().length === 0, 60_000, 500);
   const sweepLine = await waitFor("retention.sweep in app.log", () => readFileSync(join(USER_DATA, "app.log"), "utf8").split("\n").filter((l) => l.includes("retention.sweep ")).at(-1), 20_000);
-  check(10, "with the clock 73 h ahead, the start-up sweep deletes every call folder (permanently, fs.rm)", before.length === 3 && callFolders().length === 0 && /"deleted":3/.test(sweepLine), { before: before.length, after: callFolders().length, log: sweepLine.trim() });
+  check(10, "with the clock 73 h ahead, the start-up sweep deletes every call folder, the two imports too (permanently, fs.rm)", before.length === 5 && callFolders().length === 0 && /"deleted":5/.test(sweepLine), { before: before.length, after: callFolders().length, log: sweepLine.trim() });
   const recA = await api("GET", `/api/call-recorder/records/${jobA.callId}`, { cookie: ta.cookie });
   check(10, "Solace keeps the transcript", recA.status === 200 && JSON.stringify(recA.json).includes("35 triệu"), { status: recA.status });
   await stopApp();

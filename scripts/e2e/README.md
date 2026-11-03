@@ -16,7 +16,7 @@ node scripts/e2e/run.mjs
   app's own 30–60 s retry.
 - A *TA Call Recorder* window and the small recording bar appear while it runs. Leave them alone; the script
   closes them.
-- The last lines print the 11 steps, each `PASS` or `FAIL`. The exit code is 0 only when all of them pass.
+- The last lines print the 12 steps, each `PASS` or `FAIL`. The exit code is 0 only when all of them pass.
 - `--keep-work` keeps the throwaway folder (database, app settings, queue) for a look afterwards. Without it,
   the folder is deleted.
 
@@ -38,10 +38,11 @@ node scripts/e2e/run.mjs
 | Fake LLM | `:4191` | OpenAI-style `/chat/completions` for Auto-fill and Ask Sol (`LLM_API_KEY=fake`). |
 | Desktop app | dev build, `--user-data-dir=<work>\app-userdata` | Debugging port 9339 (127.0.0.1) lets the script press Start / Stop through the page's own functions. |
 
-**Test hooks.** The app uses three development-only hooks (`src/main/e2eHooks.ts`):
+**Test hooks.** The app uses four development-only hooks (`src/main/e2eHooks.ts`):
 - `--e2e-audio`: scripted speech-like bursts instead of the mic and the system loopback;
 - `--e2e-gemini-endpoint`: points the app at the fake Gemini;
 - `--e2e-clock-offset-ms`: pushes the clock forward for the 3-day sweep only. Windows time is never changed.
+- `--e2e-import-file`: "Import a recording" (D-171) takes this file instead of opening the Windows file picker.
 
 They work only in a development build started with both `--dev` and `--e2e`. The installed app ignores them,
 and `tests/app/e2eHooks.test.ts` proves it.
@@ -55,7 +56,7 @@ and `tests/app/e2eHooks.test.ts` proves it.
 Links reach the app the way Windows would deliver them: as a command-line argument on the first start, or
 through a second process for a running app.
 
-## The 11 steps it asserts
+## The 12 steps it asserts
 
 1. **Seed:** a TA and an admin sign in. Then a job, a candidate and an application at Phone Screen, all owned by the TA.
 2. **Sessions:** `POST /api/call-recorder/sessions` as the TA, for `3cx` and for `self_dial`. Each returns a deep link.
@@ -76,8 +77,15 @@ through a second process for a running app.
    - Ask Sol cites the call;
    - `ai_ready` is false with no LLM key.
 9. **Local only:** a start without a link is transcribed, never sent, and the proxy sees nothing.
-10. **Retention:** the app restarts with its clock 73 h ahead. The sweep deletes every call folder, and Solace keeps the transcript.
+10. **Retention:** the app restarts with its clock 73 h ahead. The sweep deletes every call folder (the two imports too), and Solace keeps the transcript.
 11. **Time tracker:** after the Confirm (move out of Phone Screen with the note and the snapshot), the call counts in the TA's time-tracker data.
+12. **Import recording (D-171):** a second candidate at Phone Screen, two Solace calls, each replaced by an imported
+    WAV (invented tones, written by the script):
+   - stereo, its modified time 2 h ago: the window offers "Import a recording instead…", the live recording is
+     deleted, the copy and the marker (3 days from the import) are in the call folder; it is sent with left = TA,
+     right = candidate; Solace stores the file's own times and flags `clock_suspect`;
+   - mono: the fake Gemini answers the labelled prompt; the call waits for "Which voice is yours?"; after "My voice
+     is A" it is sent as ta / candidate / ta.
 
 ## Logs
 

@@ -34,6 +34,13 @@ export const GEMINI_SCRIPT = {
 };
 const PITCHES = Object.keys(GEMINI_SCRIPT).map(Number);
 
+/** D-171: the answer to the labelled prompt of a mono import (one chunk): A is the recruiter here. */
+export const DIARIZED_ANSWER = [
+  "A 00:00 | Chào em, anh gọi về vị trí Game Designer.",
+  "B 00:03 | Dạ em chào anh, em mong lương khoảng 30 triệu.",
+  "A 00:06 | Cảm ơn em, anh sẽ báo lại.",
+].join("\n");
+
 /** 16-bit mono WAV → its pitch, from the zero crossings of the loud part (the fake call is pure tones). */
 export function wavPitch(wav) {
   if (wav.toString("ascii", 0, 4) !== "RIFF" || wav.toString("ascii", 8, 12) !== "WAVE") return { hz: 0, seconds: 0 };
@@ -99,6 +106,13 @@ export async function startFakeGemini(port, expectedKey) {
       return reply(400, { error: { code: 400, message: "not json" } });
     }
     if (!wav) return reply(400, { error: { code: 400, message: "no audio" } });
+    // D-171: a mono import asks for labelled turns of a whole chunk (core/diarize.ts DIARIZE_PROMPT).
+    let prompt = "";
+    try { prompt = JSON.parse(body.toString("utf8")).contents?.[0]?.parts?.[0]?.text ?? ""; } catch { /* checked above */ }
+    if (/^This audio is a phone call between two people/.test(prompt)) {
+      entry.kind = "diarize";
+      return reply(200, { candidates: [{ content: { role: "model", parts: [{ text: DIARIZED_ANSWER }] }, finishReason: "STOP" }] });
+    }
     const { hz, seconds } = wavPitch(wav);
     const pitch = nearestPitch(hz);
     Object.assign(entry, { wav_seconds: Math.round(seconds * 100) / 100, hz: Math.round(hz), pitch });
