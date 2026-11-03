@@ -9,6 +9,7 @@ import { open, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { StreamResampler } from "../renderer/resample";
 import { demuxAudio, type AudioTrack, type WavInfo } from "./audioDemux";
+import { IMPORT_MESSAGES, MAX_IMPORT_MS } from "./importFlow";
 import type { ImportLayout } from "./ipcTypes";
 import { floatToInt16, openPcmReader } from "./pcmFiles";
 import { demuxWebmOpus, type OpusTrack } from "./webm";
@@ -209,11 +210,16 @@ export async function decodeFileToPcm(
   const out = stereo ? { a: await open(files.left, "w"), b: await open(files.right, "w") } : { a: await open(files.mono, "w"), b: null };
   let diff = 0;
   let energy = 0;
+  // Review R3-2 f3: whatever the header said, decoding stops past 2 hours of output (1 s of slack).
+  const maxSamples = (MAX_IMPORT_MS / 1000 + 1) * 16_000;
+  let written = 0;
   const put = async (fh: Awaited<ReturnType<typeof open>>, pcm: Float32Array) => {
     const ints = floatToInt16(pcm);
     await fh.write(new Uint8Array(ints.buffer, ints.byteOffset, ints.byteLength));
   };
   const write = async (first: Float32Array, second: Float32Array | undefined) => {
+    written += first.length;
+    if (written > maxSamples) throw new Error(IMPORT_MESSAGES.tooLong);
     if (!stereo || !second) return put(out.a, first);
     const n = Math.min(first.length, second.length);
     for (let i = 0; i < n; i += 4) {

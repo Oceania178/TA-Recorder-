@@ -4,7 +4,7 @@
 import type { ImportLayout, ImportPick, SpeakerPreviewView } from "../main/ipcTypes";
 import { api } from "./bridge";
 import { formatElapsed } from "./elapsedClock";
-import { importDone, layoutDefault, layoutHint, speakerSendLabel } from "./importText";
+import { importDone, layoutDefault, layoutHint, LIVE_ENDED_MESSAGE, liveEndedBeforeImport, speakerSendLabel } from "./importText";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -86,6 +86,14 @@ async function choose(): Promise<void> {
 async function runChosen(): Promise<void> {
   if (busy || !pick) return;
   const p = pick;
+  if (liveEndedBeforeImport(p, host.liveLinked())) {
+    // The call was stopped (or reached 4 h) after the file was picked: it is saved and goes to Solace as usual.
+    status("import-status", "pass", LIVE_ENDED_MESSAGE);
+    resetDialog();
+    $("import-live-warning").hidden = true;
+    api().cancelImport();
+    return;
+  }
   const layout = (p.channels >= 2 ? document.querySelector<HTMLInputElement>('input[name="import-layout"]:checked')?.value : "mixed") as ImportLayout | undefined;
   busy = true;
   ($("import-run") as HTMLButtonElement).disabled = true;

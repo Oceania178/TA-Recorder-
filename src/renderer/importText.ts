@@ -43,3 +43,10 @@ export function layoutHint(looksLikeAppFile: boolean): string {
     ? "The file name looks like a TA Call Recorder recording."
     : 'Not sure? Choose "No, both voices are mixed": Gemini then tells the two voices apart, and you check them before anything is sent.';
 }
+
+/** Review R3-2 f5: a file was picked during a live Solace call, but the call ended (and was saved) before Import. */
+export const LIVE_ENDED_MESSAGE = "The live call ended before you pressed Import. It was saved and is transcribed and sent to Solace as usual. Nothing was imported.";
+
+export function liveEndedBeforeImport(pick: { forLive: boolean }, liveNow: boolean): boolean {
+  return pick.forLive && !liveNow;
+}

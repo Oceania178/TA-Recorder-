@@ -8,7 +8,12 @@
 //   M4A        the MP4 boxes of the sound track: AAC decoder config (esds), sample sizes and offsets
 //              (stsz / stsc / stco or co64), length from mdhd; a fragmented file (moof / trun) too.
 // Pure TypeScript: no Node or Electron APIs, so it is tested with synthetic files.
+import { MAX_RATE, MIN_RATE } from "../renderer/resample";
 import { demuxWebmOpus } from "./webm";
+
+/** Review R3-2 F1: only values a real recording has (anything else is a damaged header: "can't read"). */
+const plausible = (rate: number, channels: number) =>
+  Number.isInteger(rate) && rate >= MIN_RATE && rate <= MAX_RATE && Number.isInteger(channels) && channels >= 1 && channels <= 8;
 
 export interface AudioPacket {
   timestampUs: number;
@@ -43,6 +48,7 @@ export type Inspected = { ok: true; format: string; channels: number; durationMs
 
 export const UNREADABLE = "The app could not read this recording. Try another file, or export it again as MP3 or WAV.";
 const NOT_OPUS = "This OGG file is not Opus audio. Export the recording as MP3 or WAV, then import it.";
+const MP3_CHANGES = "This MP3 changes its format part-way (sample rate or channels), so the app cannot read all of it. Export the recording again as MP3 or WAV, then import it.";
 const fail = (message = UNREADABLE): Demuxed => ({ ok: false, message });
 const ascii = (b: Uint8Array, at: number, n: number) => String.fromCharCode(...b.subarray(at, at + n));
 const view = (b: Uint8Array) => new DataView(b.buffer, b.byteOffset, b.byteLength);
@@ -65,9 +71,10 @@ function wavInfo(b: Uint8Array): WavInfo | null {
       let tag = v.getUint16(off + 8, true);
       const channels = v.getUint16(off + 10, true);
       const sampleRate = v.getUint32(off + 12, true);
+      const blockAlign = v.getUint16(off + 20, true);
       const bits = v.getUint16(off + 22, true);
       if (tag === 0xfffe && size >= 26) tag = v.getUint16(off + 32, true); // WAVE_FORMAT_EXTENSIBLE: the subformat
-      if (!(channels >= 1 && sampleRate > 0)) return null;
+      if (!plausible(sampleRate, channels) || blockAlign !== (channels * bits) / 8) return null;
       if (tag === 1 && [8, 16, 24, 32].includes(bits)) fmt = { format: "pcm", bits, sampleRate, channels };
       else if (tag === 3 && bits === 32) fmt = { format: "float", bits, sampleRate, channels };
       else return null;
@@ -118,12 +125,26 @@ function demuxMp3(b: Uint8Array): Demuxed {
   if (!first) return fail();
   const packets: AudioPacket[] = [];
   let samples = 0;
+  // A frame is trusted only when the next one starts right after it (or the file ends): no false sync in junk.
+  const confirmed = (pos: number, f: NonNullable<ReturnType<typeof mp3Frame>>) => pos + f.length >= b.length || mp3Frame(b, pos + f.length) !== null;
+  const same = (f: NonNullable<ReturnType<typeof mp3Frame>>) => f.rate === first!.rate && f.channels === first!.channels;
   while (at < b.length) {
     const f = mp3Frame(b, at);
-    if (!f || f.rate !== first.rate) break;
-    packets.push({ timestampUs: Math.round((samples / first.rate) * 1e6), data: b.subarray(at, Math.min(b.length, at + f.length)) });
-    samples += f.samples;
-    at += f.length;
+    if (f && same(f)) {
+      packets.push({ timestampUs: Math.round((samples / first.rate) * 1e6), data: b.subarray(at, Math.min(b.length, at + f.length)) });
+      samples += f.samples;
+      at += f.length;
+      continue;
+    }
+    // Review R3-2 f4: never cut short silently. A real frame in another format → refused in plain words;
+    // junk between frames → skipped to the next real frame; an ID3v1 tag (or nothing more) → the end.
+    if (f && confirmed(at, f)) return fail(MP3_CHANGES);
+    if (b.length - at <= 128 && ascii(b, at, 3) === "TAG") break;
+    let next = at + 1;
+    let g: ReturnType<typeof mp3Frame> = null;
+    while (next < b.length && !((g = mp3Frame(b, next)) && confirmed(next, g))) next++;
+    if (next >= b.length) break;
+    at = next;
   }
   if (!packets.length) return fail();
   return {
@@ -176,6 +197,7 @@ function demuxOgg(b: Uint8Array): Demuxed {
   if (ascii(packets[0], 0, 8) !== "OpusHead") return fail(NOT_OPUS);
   const head = packets[0];
   const channels = head[9];
+  if (!plausible(48000, channels)) return fail();
   const preSkip = head[10] | (head[11] << 8);
   let t = 0;
   const out: AudioPacket[] = packets.slice(2).map((data) => {
@@ -184,10 +206,11 @@ function demuxOgg(b: Uint8Array): Demuxed {
     return p;
   });
   if (!out.length) return fail();
-  const samples = lastGranule > preSkip ? lastGranule - preSkip : t;
+  // Review R3-2 f3: the larger of the header's length and the packets' (a damaged granule cannot shorten it).
+  const samples = Math.max(lastGranule > preSkip ? lastGranule - preSkip : 0, t);
   return {
     ok: true, kind: "packets", format: "ogg",
-    track: { codec: "opus", codecPrivate: head, sampleRate: 48000, channels: channels >= 1 ? channels : 2, packets: out },
+    track: { codec: "opus", codecPrivate: head, sampleRate: 48000, channels, packets: out },
     durationMs: Math.round((samples / 48000) * 1000),
   };
 }
@@ -196,7 +219,7 @@ function demuxOgg(b: Uint8Array): Demuxed {
 function demuxWebm(b: Uint8Array): Demuxed {
   try {
     const t = demuxWebmOpus(b);
-    if (!t.packets.length) return fail();
+    if (!t.packets.length || !plausible(t.sampleRate || 48000, t.channels || 1)) return fail();
     const last = t.packets[t.packets.length - 1];
     return {
       ok: true, kind: "packets", format: "webm",
@@ -253,7 +276,7 @@ function esdsConfig(b: Uint8Array, esds: Box): Uint8Array | null {
   return null;
 }
 
-function mp4Packets(b: Uint8Array, top: Box[], stbl: Box, rate: number): { packets: AudioPacket[]; fragmented: boolean } {
+function mp4Packets(b: Uint8Array, top: Box[], stbl: Box, rate: number): { packets: AudioPacket[]; fragmented: boolean } | null {
   const v = view(b);
   const stsz = child(b, stbl, "stsz");
   const stsc = child(b, stbl, "stsc");
@@ -262,6 +285,8 @@ function mp4Packets(b: Uint8Array, top: Box[], stbl: Box, rate: number): { packe
   if (stsz) {
     const fixed = v.getUint32(stsz.body + 4);
     const count = v.getUint32(stsz.body + 8);
+    // Review R3-2 f2: a count the file cannot hold is a damaged table — refused before anything is allocated.
+    if (fixed ? count > b.length / fixed : 12 + 4 * count > stsz.end - stsz.body) return null;
     for (let i = 0; i < count; i++) sizes.push(fixed || v.getUint32(stsz.body + 12 + 4 * i));
   }
   const packets: AudioPacket[] = [];
@@ -271,8 +296,10 @@ function mp4Packets(b: Uint8Array, top: Box[], stbl: Box, rate: number): { packe
   if (sizes.length && stsc && stco) {
     // The sample tables: chunk offsets, samples per chunk (runs), sample sizes.
     const chunks = v.getUint32(stco.body + 4);
+    const stscCount = v.getUint32(stsc.body + 4);
+    if (8 + chunks * (stco.type === "co64" ? 8 : 4) > stco.end - stco.body || 8 + stscCount * 12 > stsc.end - stsc.body) return null;
     const offsets = Array.from({ length: chunks }, (_, i) => (stco.type === "co64" ? Number(v.getBigUint64(stco.body + 8 + 8 * i)) : v.getUint32(stco.body + 8 + 4 * i)));
-    const runs = Array.from({ length: v.getUint32(stsc.body + 4) }, (_, i) => ({ first: v.getUint32(stsc.body + 8 + 12 * i), per: v.getUint32(stsc.body + 12 + 12 * i) }));
+    const runs = Array.from({ length: stscCount }, (_, i) => ({ first: v.getUint32(stsc.body + 8 + 12 * i), per: v.getUint32(stsc.body + 12 + 12 * i) }));
     let s = 0;
     let r = 0;
     for (let c = 0; c < chunks && s < sizes.length; c++) {
@@ -345,10 +372,14 @@ function demuxMp4(b: Uint8Array): Demuxed {
     const timescale = version === 1 ? v.getUint32(mdhd.body + 20) : v.getUint32(mdhd.body + 12);
     const duration = version === 1 ? Number(v.getBigUint64(mdhd.body + 24)) : v.getUint32(mdhd.body + 16);
     const rate = sampleRate || timescale;
-    const { packets, fragmented } = mp4Packets(b, top, stbl, rate);
-    if (!packets.length) return fail();
+    if (!plausible(rate, channels || 2)) return fail();
+    const parsed = mp4Packets(b, top, stbl, rate);
+    if (!parsed || !parsed.packets.length) return fail();
+    const { packets, fragmented } = parsed;
+    const counted = Math.round(((packets.length * 1024) / rate) * 1000);
     // A fragmented file's mdhd holds no real length (MediaRecorder writes a placeholder): count the samples.
-    const durationMs = !fragmented && duration > 0 && timescale > 0 ? Math.round((duration / timescale) * 1000) : Math.round(((packets.length * 1024) / rate) * 1000);
+    // Review R3-2 f3: otherwise the larger of mdhd's length and the counted one.
+    const durationMs = !fragmented && duration > 0 && timescale > 0 ? Math.max(counted, Math.round((duration / timescale) * 1000)) : counted;
     return {
       ok: true, kind: "packets", format: "m4a",
       track: { codec: "mp4a.40.2", codecPrivate: config, sampleRate: rate, channels: channels || 2, packets },

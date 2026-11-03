@@ -7,6 +7,8 @@
 
 const HALF_OUT = 8; // filter half-width, in output samples
 const PHASES = 512;
+export const MIN_RATE = 4_000;
+export const MAX_RATE = 192_000;
 
 export class StreamResampler {
   private readonly step: number; // input samples per output sample
@@ -19,7 +21,9 @@ export class StreamResampler {
   private nextOut = 0;
 
   constructor(readonly inRate: number, readonly outRate = 16000) {
-    if (!(inRate > 0) || !(outRate > 0)) throw new Error("bad sample rate");
+    // Review R3-2 F1: only rates a real recording has; the filter grows with the rate, so a damaged header could
+    // otherwise make it huge (4 GHz froze main for minutes).
+    if (!(inRate >= MIN_RATE && inRate <= MAX_RATE) || !(outRate >= MIN_RATE && outRate <= MAX_RATE)) throw new Error("bad sample rate");
     this.step = inRate / outRate;
     this.half = Math.max(2, Math.ceil(HALF_OUT * Math.max(1, this.step)));
     this.width = 2 * this.half;

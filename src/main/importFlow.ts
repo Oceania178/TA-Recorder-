@@ -134,8 +134,8 @@ export async function runImport(d: ImportDeps, o: { source: string; session: Lin
   let decoded: { audio: ImportAudio; durationMs: number; sameOnBoth?: boolean };
   try {
     decoded = await d.decode(copy, tmp, id, o.layout);
-  } catch {
-    return fail(IMPORT_MESSAGES.unreadable);
+  } catch (e) {
+    return fail(e instanceof Error && e.message === IMPORT_MESSAGES.tooLong ? IMPORT_MESSAGES.tooLong : IMPORT_MESSAGES.unreadable);
   }
   if (!(decoded.durationMs > 0)) return fail(IMPORT_MESSAGES.unreadable);
   if (decoded.durationMs > MAX_IMPORT_MS) return fail(IMPORT_MESSAGES.tooLong);
