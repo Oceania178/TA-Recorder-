@@ -408,17 +408,18 @@ leaves the laptop except to Gemini, as for a live call (D-139); no Solace change
   - **Without Solace:** "Import a recording…" shows only in **Test mode** and makes a "Local only" call (D-165).
   - The notice comes first (D-126); one call or import at a time (no recording or link while an import runs).
 - **Files:** MP3, M4A, WAV, WebM, OGG / Opus (the app's own `.webm` too), up to **250 MB** and **2 hours**. Anything
-  else is refused in plain words. The limit is 2 h, not 4 h (D-161), because the decoder holds the whole decoded
-  file in memory (16 kHz: about 0.9 GB for 2 h of stereo).
+  else is refused in plain words. The length is read from the file before anything is decoded, and decoding streams
+  (see "fix round 1" below for the measured memory).
 - **Copy, retention, OneDrive:** the file is copied (never moved or changed) into
   `<recordings>\.in-progress\<id>\<id>.import.<ext>`, decoded to 16 kHz `.s16`, given `<id>.call.json` (`source:
   "import"`, no original file name — it may hold a candidate's name) and the retention marker, then moved to
   `<recordings>\<id>\`. The marker's end time is the **import** time, so the copy is deleted **3 days after the
   import** (D-140), however old the recording. A recordings folder in OneDrive or on a network drive refuses the
   import like a live call.
-- **Stereo vs mono:** two different channels = the app's layout (left = TA, right = candidate), transcribed exactly
-  like a live call. One channel, or the same sound on both (a phone recording saved as stereo), = **mono**. The
-  "Both voices are on both channels" box forces mono for a stereo file that is not from this app.
+- **Stereo vs mono:** a two-channel file is read as the TA answers "Is this a TA Call Recorder stereo file (you on
+  the left, the candidate on the right)?" (fix round 1, I3): Yes = left TA / right candidate, transcribed exactly
+  like a live call; "Yes, but I'm on the right" swaps; "No, both voices are mixed" (the default for other files) =
+  **mono**. One channel, or the same sound on both, = **mono**.
 - **Mono path** (`src/core/diarize.ts`, `src/core/mono.ts`):
   - chunks of ≤ 5 min with 10 s overlap (each WAV well under Gemini's ~20 MB inline limit); one request per chunk,
     asking for `A mm:ss | words` lines (A = whoever speaks first in that chunk);
@@ -470,3 +471,41 @@ leaves the laptop except to Gemini, as for a live call (D-139); no Solace change
    sent.
 6. Recordings folder inside OneDrive → the import is refused like a live call.
 7. Three days after an import (or the clean-up task), its call folder is gone.
+
+### Import recording — fix round 1 (review R3, 03/11/2026)
+- **I1, one session per attempt** (`src/main/importCoordinator.ts`): the Solace session of a live recording the TA
+  replaced is used by THAT import only. The attempt ends — and the session is dropped — on success, on any failure,
+  when the dialog closes, and when a new Solace link or a local start begins. A failure after the discard says "The
+  recording for this Solace call was discarded and the import failed. Press Call & record in Solace again." A pick
+  made during a live Solace call can never become a Local only import. A later Test-mode import is always Local only.
+- **I2, the length before decoding, and streaming decode** (`src/main/audioDemux.ts`, `decoderClient.ts`,
+  `renderer/decoder.ts`, `renderer/resample.ts`): WAV, MP3, OGG/Opus, WebM and M4A (also fragmented, as
+  MediaRecorder and some phones write it) are READ for their length and channels; over 2 hours is refused when the
+  file is picked, before the live recording is discarded and before anything is decoded. Then everything is decoded
+  streaming: WAV in main; the others as packets through the hidden decoder page (WebCodecs: Opus, MP3, AAC), any
+  sample rate to 16 kHz, 10 s per batch, each batch carrying copies of its packets (a view of the whole file made
+  IPC copy the whole file with every batch: 269 s and 2.5 GB for 10 min before, 8 s and 192 MB after).
+  **Measured on this laptop** (synthetic 1 h 59 min stereo 48 kHz Opus, 55 MB; hidden dev app, read from outside
+  with Get-Process): decoder page **306 MB**, main **377 MB** at peak, 3.5 min. The whole-file `decodeAudioData` of
+  the first build needed **3.5 GB** for 2 h (1.5 GB for 30 min) even at a 16 kHz context. A file just over 2 h
+  (7202 s) was refused at the pick (main 263 MB while reading it). A crashed decoder page fails the import at once.
+  An OGG file that is not Opus (Vorbis) is refused in plain words.
+- **I3, the TA says how two channels are laid out**: every two-channel file asks "Is this a TA Call Recorder stereo
+  file (you on the left, the candidate on the right)?" — **Yes** / **No, both voices are mixed** / **Yes, but I'm on the
+  right** (swaps). The default is "mixed" unless the file has the name of one of this app's recordings (the hint says
+  so). If the TA says "Yes" but both channels carry the same sound, the mono path is used and the result says so.
+  One-channel files ask nothing. The answer is kept in `<id>.call.json` (`layout`), so a retry decodes the same way.
+- **Minor fixes:** a part Gemini refuses is one "[không nghe rõ]" turn, and the voice dialog says "This part could
+  not be transcribed"; parts with no turn heard in their overlap say "Check this part: the letters may be the other
+  way round"; a live recording that cannot be deleted is marked `discarded.flag` so recovery deletes it (never
+  recovered or sent) and the window never stays in "Saving…"; the source file's bytes and modified time are tested
+  unchanged; the main-process import rules are tested through the coordinator (behaviour, not source text).
+- **Tests:** `tests/app/importFixRound1.test.ts` (22, red first), earlier import tests updated. 479/479; typecheck,
+  smoke, `selftest:audio`; E2E 12/12 (step 12 answers the layout question; the default for a non-app file is
+  "mixed"). Probes (synthetic tones only, hidden windows): a MediaRecorder M4A (fragmented, AAC) imports as stereo.
+  MP3 was demuxed in unit tests only (no encoder on this laptop): one of Triet's hand tests.
+- **Hand tests added:** (8) a stereo phone or voice-memo file → answer "No, both voices are mixed" → the voice
+  question appears, no sentence twice; (9) the app's own stereo `.webm` → the question defaults to "Yes"; (10) a file
+  over 2 hours → refused at once, the live recording keeps going; (11) during a Solace call, Import → pick a broken
+  file → Import → the message says the Solace recording was discarded; then, in Test mode, import a role-play file →
+  it is "Local only", never in that candidate's profile.
