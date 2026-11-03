@@ -522,3 +522,6 @@ leaves the laptop except to Gemini, as for a live call (D-139); no Solace change
 - **f5:** a file picked during a live Solace call whose call then ended (Stop or the 4 h cap) before Import: the
   dialog says the call was saved and is sent to Solace as usual, and nothing is imported.
 - Tests: `tests/app/importFixRound2.test.ts` (11, red first). 490/490; typecheck, smoke, `selftest:audio`, E2E 12/12.
+
+## Installer 0.1.6 (controller, 03/11/2026)
+- 0.1.5 plus Import recording (D-171) after two review rounds. Spec v1.30. 490/490 tests, E2E 12/12.
