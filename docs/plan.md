@@ -396,3 +396,77 @@ unchanged. The version stays 0.1.4; the controller builds the installer.
 
 ## Installer 0.1.5 (controller, 02/11/2026)
 - 0.1.4 plus UX round 2 (P1, P2, P3, P11, P4) and the notification crash fix (show notifications 50 ms later). Spec v1.27 (D-170).
+
+## Import recording (D-171, spec v1.28; built 03/11/2026)
+Instead of recording live, the TA uses a recording they already have (phone, Sound Recorder, an older file of this
+app). It is transcribed on the laptop and sent with the Solace session exactly like a live call. The audio never
+leaves the laptop except to Gemini, as for a live call (D-139); no Solace change was needed.
+- **How the TA starts it:**
+  - **With Solace:** press "Call & record" (or "Record only, I'll call myself") as usual. The app starts recording;
+    the window (and the floating bar's **Import** button) offers **"Import a recording instead…"**. The TA picks the
+    file first; then the live recording is stopped and **deleted**, and its session goes to the import.
+  - **Without Solace:** "Import a recording…" shows only in **Test mode** and makes a "Local only" call (D-165).
+  - The notice comes first (D-126); one call or import at a time (no recording or link while an import runs).
+- **Files:** MP3, M4A, WAV, WebM, OGG / Opus (the app's own `.webm` too), up to **250 MB** and **2 hours**. Anything
+  else is refused in plain words. The limit is 2 h, not 4 h (D-161), because the decoder holds the whole decoded
+  file in memory (16 kHz: about 0.9 GB for 2 h of stereo).
+- **Copy, retention, OneDrive:** the file is copied (never moved or changed) into
+  `<recordings>\.in-progress\<id>\<id>.import.<ext>`, decoded to 16 kHz `.s16`, given `<id>.call.json` (`source:
+  "import"`, no original file name — it may hold a candidate's name) and the retention marker, then moved to
+  `<recordings>\<id>\`. The marker's end time is the **import** time, so the copy is deleted **3 days after the
+  import** (D-140), however old the recording. A recordings folder in OneDrive or on a network drive refuses the
+  import like a live call.
+- **Stereo vs mono:** two different channels = the app's layout (left = TA, right = candidate), transcribed exactly
+  like a live call. One channel, or the same sound on both (a phone recording saved as stereo), = **mono**. The
+  "Both voices are on both channels" box forces mono for a stereo file that is not from this app.
+- **Mono path** (`src/core/diarize.ts`, `src/core/mono.ts`):
+  - chunks of ≤ 5 min with 10 s overlap (each WAV well under Gemini's ~20 MB inline limit); one request per chunk,
+    asking for `A mm:ss | words` lines (A = whoever speaks first in that chunk);
+  - chunks are lined up through the turns both heard in their overlap, then merged (nothing twice);
+  - the call waits in the queue (`transcribed`, `speakersNeeded`): no transcript file and nothing sent until the TA
+    answers **"Which voice is yours?"**: the first lines of each part with A / B, "My voice is A / B", "Swap A and B
+    in this part" (pre-ticked where the overlap says the letters flipped). Then the usual `.transcript.json` is
+    written (ta / candidate) and the call is sent (or ends Local only);
+  - Recent calls shows **"Choose your voice"**; the bar says "Choose which voice is yours"; one notification asks for
+    it (clicking it opens the dialog).
+  - **Limits (said in the dialogs):** two voices only; the letters are Gemini's guess (two similar voices or a short
+    "ừ" can be mixed up); turn times are to the second as Gemini writes them.
+- **Times and what Solace does with them** (read from Solace's `contract.ts`, `intake.routes.ts`, `timeTracker.ts`,
+  `docs/specs/call-recorder.md`; proven by E2E step 12):
+  - the app sends `ended_at` = the file's modified time and `started_at` = that − its length, when the modified time is
+    plausible (not in the future, not older than 30 days); otherwise the import time. `duration_s` = the length;
+  - **Solace accepts it (201) — nothing in the contract refuses an older recording.** It flags `clock_suspect` when
+    `started_at` is more than 30 min before the session was created (the press of "Call & record"), i.e. any
+    recording made more than ~30 min before the press; a recording made after the press (e.g. "Record only, I'll
+    call myself" on a phone, then imported) is not flagged;
+  - flagged calls show the small "laptop clock" flag on "Calls (N)", and the **time tracker excludes** that Phone
+    Screen stay (reason `clock_suspect`) — right for an import, whose times do not measure the live flow;
+  - "Paste your notes" shows the recording's own date and time; the 72 h upload window (D-144) is met because the
+    import is sent right away. A Solace-side "imported" label would need a contract change (`schema_version` 2,
+    unknown fields are refused): not done, controller's call.
+- **Code:** `src/main/importFlow.ts` (rules, copy, times, marker), `decoderClient.ts` / `renderer/decoder.ts`
+  (`decodeFileToPcm`: `decodeAudioData` at 16 kHz in the hidden decoder page), `pcmFiles.ts` (pre-decoded and mono
+  files, re-decode of the copy on a retry), `callJobs.ts` (`speakerPreview`, `chooseSpeakers`),
+  `renderer/importUi.ts` / `importText.ts`, `main.ts` (IPC; the page gets an opaque token, never a path), dev-only
+  `--e2e-import-file` (packaged-inert, tested).
+- **Tests:** `tests/core/importMono.test.ts` (15), `tests/app/importRecording.test.ts` (19), `importJobs.test.ts` (5),
+  `importUi.test.ts` (7) — red first. 459/459; typecheck, smoke, `selftest:audio` pass; **E2E 12/12** (new step 12:
+  a stereo and a mono import for two Solace calls against the real Solace backend). This Electron decodes AAC
+  (M4A) and WebM Opus (probe with synthetic tones); MP3 and OGG were not tried with a real file.
+
+### Hand tests for Triet (import)
+1. Solace → "Record only, I'll call myself" on a role-play candidate. In the app, press **Import a recording
+   instead…** (window or bar) → the dialog lists the limits → choose a phone recording (M4A/MP3) → "Copying the
+   file…", "Reading the audio…", then "Imported…". The live recording is gone; Recent calls shows the call
+   "Imported".
+2. A **mono** phone recording: after transcription, a notification and Recent calls ask **"Choose your voice"**. Read
+   the lines, pick your letter, swap a part if needed, **Send to Solace**. In Solace, "Paste your notes" shows TA /
+   Ứng viên the right way round, with the recording's own date and time; "Calls (N)" may show the clock flag.
+3. One of the app's own stereo `.webm` files (from a Test mode call): it is sent without the voice question
+   (left = you).
+4. A `.docx` or a 3-hour file → refused in plain words; nothing is copied. Cancel in the file picker → the live
+   recording keeps going.
+5. Test mode off, no Solace call: no Import button. Test mode on: "Import a recording…" → a Local only call, never
+   sent.
+6. Recordings folder inside OneDrive → the import is refused like a live call.
+7. Three days after an import (or the clean-up task), its call folder is gone.
