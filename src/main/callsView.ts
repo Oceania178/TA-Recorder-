@@ -14,6 +14,10 @@ export interface CallRow {
   detail: string | null;
   canRetry: boolean;
   hasTranscript: boolean;
+  /** D-171: a mono import waits for the TA to say which voice is theirs. */
+  needsSpeakers: boolean;
+  /** D-171: the call came from "Import a recording". */
+  imported: boolean;
 }
 
 const REASONS: Record<FailureReason, string> = {
@@ -48,13 +52,21 @@ const LABEL: Record<Exclude<Job["stage"], "failed" | "local_only">, CallRow["sta
 };
 
 const LOCAL_ONLY = "Local only — not linked to Solace";
+export const CHOOSE_VOICE = "Choose which voice is yours, then it is sent.";
+const CHOOSE_VOICE_LOCAL = "Choose which voice is yours (Local only — never sent).";
 
 function row(j: Job, o: { hasKey: boolean; transcriptIds: ReadonlySet<string> }): CallRow {
   const linked = j.sessionId !== null;
   const started = Date.parse(j.startedAt);
   const ended = Date.parse(j.endedAt);
   const durationS = Number.isNaN(started) || Number.isNaN(ended) ? 0 : Math.max(0, Math.round((ended - started) / 1000));
-  const base = { id: j.id, startedAt: j.startedAt, durationS, linked, hasTranscript: o.transcriptIds.has(j.id), canRetry: false };
+  const base = {
+    id: j.id, startedAt: j.startedAt, durationS, linked, hasTranscript: o.transcriptIds.has(j.id), canRetry: false,
+    needsSpeakers: j.stage === "transcribed" && j.speakersNeeded === true, imported: j.imported === true,
+  };
+  if (base.needsSpeakers) {
+    return { ...base, stage: "Transcribed", detail: linked ? CHOOSE_VOICE : CHOOSE_VOICE_LOCAL };
+  }
 
   if (j.stage === "failed") {
     return { ...base, stage: "Failed", detail: reasonText(j.failure?.reason ?? "unexpected_error"), canRetry: true };

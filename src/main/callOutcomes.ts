@@ -12,7 +12,8 @@ export function callTime(iso: string): string {
 
 export interface Outcome {
   id: string;
-  outcome: "sent" | "failed";
+  /** choose: a mono import is transcribed and waits for the TA's voice choice (D-171). */
+  outcome: "sent" | "failed" | "choose";
   title: string;
   body: string;
 }
@@ -30,8 +31,10 @@ export class OutcomeWatcher {
     for (const r of rows) {
       const before = this.stage.get(r.id);
       this.stage.set(r.id, r.stage);
-      const outcome = r.stage === "Sent" ? "sent" : r.stage === "Failed" ? "failed" : null;
-      if (!outcome || !r.linked || before === r.stage) continue;
+      const choose = r.needsSpeakers === true;
+      const outcome = choose ? "choose" : r.stage === "Sent" ? "sent" : r.stage === "Failed" ? "failed" : null;
+      // Sent / Failed only for Solace calls; the voice choice for every import (nothing goes on without it).
+      if (!outcome || (!r.linked && !choose) || (before === r.stage && !choose)) continue;
       const key = `${r.id}:${outcome}`;
       if (!this.seeded) {
         this.told.add(key);
@@ -45,7 +48,11 @@ export class OutcomeWatcher {
         id: r.id,
         outcome,
         title: TITLE,
-        body: outcome === "sent" ? `${call} sent to Solace.` : `${call} could not be sent to Solace. Open TA Call Recorder to see why.`,
+        body: outcome === "sent"
+          ? `${call} sent to Solace.`
+          : outcome === "failed"
+            ? `${call} could not be sent to Solace. Open TA Call Recorder to see why.`
+            : `${call} is transcribed. Open TA Call Recorder and choose which voice is yours.`,
       });
     }
     this.seeded = true;

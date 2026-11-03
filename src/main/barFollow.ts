@@ -24,6 +24,7 @@ export function followView(r: CallRow | undefined): BarFollowView {
     case "Transcribing":
       return { ...base, text: "Transcribing…" };
     case "Transcribed":
+      if (r.needsSpeakers) return { ...base, text: "Choose which voice is yours (open the recorder)" };
       if (!r.linked) return { ...base, text: "Transcribed (Local only)", final: true };
       return { ...base, text: r.detail?.startsWith("Waiting to try again") ? "Waiting to send (network busy)" : "Transcribed, sending next" };
     case "Sending":

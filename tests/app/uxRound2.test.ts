@@ -18,7 +18,7 @@ const ROOT = join(__dirname, "..", "..");
 const read = (...p: string[]) => readFile(join(ROOT, ...p), "utf8");
 
 function row(over: Partial<CallRow> = {}): CallRow {
-  return { id: "sess-0001-aaaa", startedAt: "2026-11-02T14:05:00+07:00", durationS: 300, linked: true, stage: "Recorded", detail: null, canRetry: false, hasTranscript: false, ...over };
+  return { id: "sess-0001-aaaa", startedAt: "2026-11-02T14:05:00+07:00", durationS: 300, linked: true, stage: "Recorded", detail: null, canRetry: false, hasTranscript: false, needsSpeakers: false, imported: false, ...over };
 }
 const hhmm = (iso: string) => {
   const d = new Date(iso);

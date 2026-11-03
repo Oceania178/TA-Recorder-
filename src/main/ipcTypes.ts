@@ -80,6 +80,10 @@ export interface CallRowView {
   detail: string | null;
   canRetry: boolean;
   hasTranscript: boolean;
+  /** D-171: a mono import waits for the TA to say which voice is theirs. */
+  needsSpeakers: boolean;
+  /** D-171: the call came from "Import a recording". */
+  imported: boolean;
 }
 
 /** A message from main for the recorder window (e.g. why a Solace link did not start a recording). */

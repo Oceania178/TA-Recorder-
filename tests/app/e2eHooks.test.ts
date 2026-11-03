@@ -25,11 +25,12 @@ describe("readE2eHooks: inert unless a development build is started with --dev -
       fakeAudio: true,
       geminiEndpoint: "http://127.0.0.1:4190",
       clockOffsetMs: 262_800_000,
+      importFile: null,
     });
   });
 
   it("defaults: real audio, the real Gemini address, the real clock", () => {
-    expect(readE2eHooks(["electron", ".", "--dev", "--e2e"], false)).toEqual({ fakeAudio: false, geminiEndpoint: null, clockOffsetMs: 0 });
+    expect(readE2eHooks(["electron", ".", "--dev", "--e2e"], false)).toEqual({ fakeAudio: false, geminiEndpoint: null, clockOffsetMs: 0, importFile: null });
   });
 
   it("the Gemini override must be plain http on this laptop (no other host, no path)", () => {
