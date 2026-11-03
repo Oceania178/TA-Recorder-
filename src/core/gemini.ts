@@ -67,6 +67,8 @@ export interface TranscribeRequest {
   model: string;
   /** A WAV file (wav.ts encodeWav). */
   wav: Uint8Array;
+  /** D-171: another prompt (diarize.ts DIARIZE_PROMPT for a mono import); default GEMINI_PROMPT. */
+  prompt?: string;
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -118,7 +120,7 @@ export async function transcribeSegment(deps: GeminiDeps, req: TranscribeRequest
     contents: [{
       role: "user",
       parts: [
-        { text: GEMINI_PROMPT },
+        { text: req.prompt ?? GEMINI_PROMPT },
         { inline_data: { mime_type: "audio/wav", data: Buffer.from(req.wav.buffer, req.wav.byteOffset, req.wav.byteLength).toString("base64") } },
       ],
     }],

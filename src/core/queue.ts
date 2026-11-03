@@ -52,6 +52,10 @@ export interface NewJob {
   endedAt: string;
   /** The ticket check's `upload_until` (D-144); null for a local-only call. */
   sendBy: string | null;
+  /** D-171: an imported file with both voices on one channel (transcribed with speaker labels). */
+  audio?: "mono";
+  /** D-171: the call came from "Import recording", not from a live recording. */
+  imported?: boolean;
 }
 
 export interface Job extends NewJob {
@@ -64,12 +68,16 @@ export interface Job extends NewJob {
   failure: Failure | null;
   createdAt: string;
   updatedAt: string;
+  /** D-171: a mono call is transcribed, and waits for the TA to say which voice is theirs before it is sent. */
+  speakersNeeded?: boolean;
 }
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,100}$/;
 const FILE_VERSION = 1;
 const TERMINAL: ReadonlySet<Stage> = new Set(["sent", "local_only", "failed"]);
 const WAITING: ReadonlySet<Stage> = new Set(["recorded", "transcribed"]);
+/** Due for a step: recorded or transcribed, but not a mono call waiting for the TA's speaker choice (D-171). */
+const isWaiting = (j: Job): boolean => WAITING.has(j.stage) && !(j.stage === "transcribed" && j.speakersNeeded === true);
 
 export class JobQueue {
   #jobs: Job[] = [];
@@ -133,7 +141,7 @@ export class JobQueue {
   }
 
   /** Move to a stage. Entering an in-progress stage keeps the retry count; any other stage starts afresh. */
-  async setStage(id: string, stage: Stage, extra: Partial<Pick<Job, "callId" | "duplicate">> = {}): Promise<void> {
+  async setStage(id: string, stage: Stage, extra: Partial<Pick<Job, "callId" | "duplicate" | "speakersNeeded">> = {}): Promise<void> {
     const inProgress = stage === "transcribing" || stage === "sending";
     await this.#patch(id, { stage, nextAttemptAt: null, failure: null, ...(inProgress ? {} : { attempts: 0 }), ...extra });
   }
@@ -159,6 +167,11 @@ export class JobQueue {
     await this.#patch(id, { stage: j.failure.stage, attempts: 0, nextAttemptAt: null, failure: null });
   }
 
+  /** D-171: the TA said which voice is theirs (the transcript is written): the call can go on (send / local only). */
+  async speakersChosen(id: string): Promise<void> {
+    await this.#patch(id, { speakersNeeded: false, nextAttemptAt: null });
+  }
+
   /** Drop jobs whose folder retention deleted. `unsent` counts those that never reached Solace or ended local. */
   async forget(ids: readonly string[]): Promise<{ removed: number; unsent: number }> {
     const gone = new Set(ids);
@@ -171,13 +184,13 @@ export class JobQueue {
 
   /** The oldest job whose next step is due now, if any. */
   nextDue(nowMs = this.now()): Job | undefined {
-    const j = this.#jobs.find((x) => WAITING.has(x.stage) && (!x.nextAttemptAt || Date.parse(x.nextAttemptAt) <= nowMs));
+    const j = this.#jobs.find((x) => isWaiting(x) && (!x.nextAttemptAt || Date.parse(x.nextAttemptAt) <= nowMs));
     return j ? { ...j } : undefined;
   }
 
   /** When the next waiting job becomes due (ms), or null when nothing waits. */
   nextWakeAt(): number | null {
-    const times = this.#jobs.filter((j) => WAITING.has(j.stage)).map((j) => (j.nextAttemptAt ? Date.parse(j.nextAttemptAt) : this.now()));
+    const times = this.#jobs.filter(isWaiting).map((j) => (j.nextAttemptAt ? Date.parse(j.nextAttemptAt) : this.now()));
     return times.length ? Math.min(...times) : null;
   }
 
@@ -211,7 +224,7 @@ export class JobQueue {
 
 /** What a step reports back to the runner. */
 export type StepOutcome =
-  | { ok: true }
+  | { ok: true; needsSpeakers?: boolean }
   | { ok: false; retryable: true; retryAfterMs?: number | null }
   | { ok: false; retryable: false; reason: FailureReason; details?: string[] };
 
@@ -279,6 +292,12 @@ export class QueueRunner {
         await q.setStage(job.id, "transcribing");
         this.#changed(job.id);
         outcome = await this.d.transcribe(job);
+        if (outcome.ok && outcome.needsSpeakers) {
+          // D-171: a mono import waits for the TA to say which voice is theirs (also a Local only one).
+          await q.setStage(job.id, "transcribed", { speakersNeeded: true });
+          this.#changed(job.id);
+          return true;
+        }
         if (outcome.ok) {
           await q.setStage(job.id, job.sessionId ? "transcribed" : "local_only");
           this.#changed(job.id);
