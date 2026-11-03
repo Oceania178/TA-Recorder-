@@ -98,8 +98,8 @@ describe("the TA says which voice is theirs", () => {
     const p = speakerPreview({ chunks: [{ index: 0, start_ms: 0, end_ms: 310_000 }, { index: 1, start_ms: 300_000, end_ms: 400_000 }], turns, flips: [false, true] }, 2, 4);
     expect(p).toEqual({
       chunks: [
-        { index: 0, start_ms: 0, end_ms: 310_000, flipped: false, turns: [{ label: "A", start_ms: 0, text: "Chào" }, { label: "B", start_ms: 2000, text: "Dạ" }] },
-        { index: 1, start_ms: 300_000, end_ms: 400_000, flipped: true, turns: [{ label: "A", start_ms: 300_000, text: "Lươn" }] },
+        { index: 0, start_ms: 0, end_ms: 310_000, flipped: false, unsure: false, unclear: false, turns: [{ label: "A", start_ms: 0, text: "Chào" }, { label: "B", start_ms: 2000, text: "Dạ" }] },
+        { index: 1, start_ms: 300_000, end_ms: 400_000, flipped: true, unsure: false, unclear: false, turns: [{ label: "A", start_ms: 300_000, text: "Lươn" }] },
       ],
     });
   });

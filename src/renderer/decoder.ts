@@ -1,11 +1,13 @@
-// The hidden decoder page: turns batches of Opus packets (from main, read out of <id>.left/.right.webm) into
-// 16 kHz mono samples with WebCodecs' AudioDecoder, and sends them back batch by batch. Nothing is played,
-// nothing leaves the laptop, and the page never sees a file path. See src/main/decoderClient.ts.
-// D-171: it also decodes a whole imported file (MP3, M4A, WAV, WebM / OGG Opus — whatever Chromium reads) at
-// 16 kHz with decodeAudioData, keeps it until main has read its channels block by block, then frees it.
+// The hidden decoder page: turns batches of compressed packets (from main: Opus out of a live call's
+// <id>.left/.right.webm, or — D-171 — Opus, MP3 or AAC out of an imported file) into 16 kHz samples with
+// WebCodecs' AudioDecoder, and sends them back batch by batch. Nothing is played, nothing leaves the laptop, the
+// page never sees a file path, and it never holds a whole file (review R3 I2). See src/main/decoderClient.ts.
+//   mono (a live call's track; a mixed import): all channels averaged;
+//   stereo (an import the TA says is TA Call Recorder stereo): channel 0 in `pcm`, channel 1 in `pcm2`.
 import type { DecoderBridge } from "../main/decoderPreload";
 import type { DecoderReply, DecoderRequest } from "../main/decoderClient";
 import { Downsampler } from "./downsample";
+import { StreamResampler } from "./resample";
 
 declare global {
   interface Window {
@@ -15,58 +17,21 @@ declare global {
 
 const OUT_RATE = 16000;
 
+interface Rate {
+  push(x: Float32Array): Float32Array;
+  flush(): Float32Array;
+}
+
 interface Session {
   decoder: AudioDecoder;
-  down: Downsampler | null;
-  out: Float32Array[];
+  stereo: boolean;
+  /** One per output channel (1 or 2), created at the first decoded block (its real sample rate). */
+  rates: Rate[] | null;
+  out: Float32Array[][];
   error: string | null;
 }
 
 const sessions = new Map<number, Session>();
-/** D-171: decoded imported files, by session id, until main closes them. */
-const files = new Map<number, AudioBuffer>();
-
-/** Two channels carrying the same sound: a mono recording saved as stereo (its difference is ~silent). */
-function sameSound(b: AudioBuffer): boolean {
-  if (b.numberOfChannels < 2) return false;
-  const l = b.getChannelData(0);
-  const r = b.getChannelData(1);
-  let diff = 0;
-  let total = 0;
-  for (let i = 0; i < l.length; i += 4) {
-    const d = l[i] - r[i];
-    diff += d * d;
-    total += l[i] * l[i] + r[i] * r[i];
-  }
-  return total === 0 || diff / total < 0.01;
-}
-
-async function handleFile(req: DecoderRequest): Promise<DecoderReply | null> {
-  if (req.kind === "loadFile") {
-    const ctx = new OfflineAudioContext(1, 1, OUT_RATE);
-    const bytes = req.bytes.byteOffset === 0 && req.bytes.byteLength === req.bytes.buffer.byteLength ? req.bytes.buffer : req.bytes.slice().buffer;
-    const buf = await ctx.decodeAudioData(bytes as ArrayBuffer);
-    files.set(req.sid, buf);
-    return { sid: req.sid, ok: true, info: { channels: buf.numberOfChannels, frames: buf.length, similar: sameSound(buf) } };
-  }
-  const buf = files.get(req.sid);
-  if (req.kind === "readFile") {
-    if (!buf) return { sid: req.sid, ok: false, error: "no_session" };
-    const end = Math.min(buf.length, req.start + req.count);
-    if (req.channel >= 0) return { sid: req.sid, ok: true, pcm: buf.getChannelData(Math.min(req.channel, buf.numberOfChannels - 1)).slice(req.start, end) };
-    const out = new Float32Array(Math.max(0, end - req.start));
-    for (let c = 0; c < buf.numberOfChannels; c++) {
-      const data = buf.getChannelData(c);
-      for (let i = 0; i < out.length; i++) out[i] += data[req.start + i] / buf.numberOfChannels;
-    }
-    return { sid: req.sid, ok: true, pcm: out };
-  }
-  if (req.kind === "close" && buf) {
-    files.delete(req.sid);
-    return { sid: req.sid, ok: true };
-  }
-  return null;
-}
 const bridge = () => window.decoderBridge;
 
 function concat(parts: Float32Array[]): Float32Array {
@@ -79,19 +44,28 @@ function concat(parts: Float32Array[]): Float32Array {
   return out;
 }
 
-/** One decoded block → mono float32 → 16 kHz, appended to the session's output. */
+/** 48 kHz (a live call) keeps the exact integer filter; any other rate (44.1, 22.05, 8 kHz…) the general one. */
+const rateFor = (sampleRate: number): Rate =>
+  sampleRate % OUT_RATE === 0 ? new Downsampler(sampleRate, OUT_RATE) : new StreamResampler(sampleRate, OUT_RATE);
+
+/** One decoded block → float32 channel(s) → 16 kHz, appended to the session's output. */
 function take(s: Session, data: AudioData): void {
   try {
     const frames = data.numberOfFrames;
     const channels = data.numberOfChannels;
-    const mono = new Float32Array(frames);
     const plane = new Float32Array(frames);
+    const outs = s.stereo ? [new Float32Array(frames), new Float32Array(frames)] : [new Float32Array(frames)];
     for (let c = 0; c < channels; c++) {
       data.copyTo(plane, { planeIndex: c, format: "f32-planar" });
-      for (let i = 0; i < frames; i++) mono[i] += plane[i] / channels;
+      if (s.stereo) {
+        if (c < 2) outs[c].set(plane);
+        if (channels === 1) outs[1].set(plane);
+      } else {
+        for (let i = 0; i < frames; i++) outs[0][i] += plane[i] / channels;
+      }
     }
-    if (!s.down) s.down = new Downsampler(data.sampleRate, OUT_RATE);
-    s.out.push(s.down.push(mono));
+    if (!s.rates) s.rates = outs.map(() => rateFor(data.sampleRate));
+    outs.forEach((x, i) => s.out[i].push(s.rates![i].push(x)));
   } catch {
     s.error = "convert_error";
   } finally {
@@ -99,16 +73,20 @@ function take(s: Session, data: AudioData): void {
   }
 }
 
+function drain(s: Session, sid: number, tail = false): DecoderReply {
+  const parts = s.out.map((chunks, i) => concat(tail && s.rates ? [...chunks, s.rates[i].flush()] : chunks));
+  s.out = s.out.map(() => []);
+  return { sid, ok: true, pcm: parts[0], ...(s.stereo ? { pcm2: parts[1] } : {}) };
+}
+
 async function handle(req: DecoderRequest): Promise<DecoderReply> {
-  const file = await handleFile(req);
-  if (file) return file;
-  if (req.kind === "loadFile" || req.kind === "readFile") return { sid: req.sid, ok: false, error: "no_session" };
   if (req.kind === "open") {
     if (typeof AudioDecoder === "undefined") return { sid: req.sid, ok: false, error: "no_webcodecs" };
-    const s: Session = { decoder: null as unknown as AudioDecoder, down: null, out: [], error: null };
+    const stereo = req.stereo === true;
+    const s: Session = { decoder: null as unknown as AudioDecoder, stereo, rates: null, out: stereo ? [[], []] : [[]], error: null };
     s.decoder = new AudioDecoder({ output: (d) => take(s, d), error: () => void (s.error = "decode_error") });
     s.decoder.configure({
-      codec: "opus",
+      codec: req.codec ?? "opus",
       sampleRate: req.sampleRate,
       numberOfChannels: req.channels,
       ...(req.codecPrivate ? { description: req.codecPrivate } : {}),
@@ -122,19 +100,16 @@ async function handle(req: DecoderRequest): Promise<DecoderReply> {
     for (const p of req.packets) s.decoder.decode(new EncodedAudioChunk({ type: "key", timestamp: p.t, data: p.data }));
     await s.decoder.flush();
     if (s.error) return { sid: req.sid, ok: false, error: s.error };
-    const pcm = concat(s.out);
-    s.out = [];
-    return { sid: req.sid, ok: true, pcm };
+    return drain(s, req.sid);
   }
   // close: the last samples of the filter, then free the decoder.
   sessions.delete(req.sid);
-  const tail = s.down ? s.down.flush() : new Float32Array(0);
   try {
     s.decoder.close();
   } catch {
     // already closed after an error
   }
-  return { sid: req.sid, ok: true, pcm: concat([...s.out, tail]) };
+  return drain(s, req.sid, true);
 }
 
 bridge().onRequest((req) => {

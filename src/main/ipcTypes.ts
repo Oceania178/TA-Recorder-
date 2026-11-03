@@ -88,17 +88,26 @@ export interface CallRowView {
 
 /** D-171: the file the TA picked for "Import a recording". The page sees its name only, never its path. */
 export type ImportPick =
-  | { ok: true; token: string; name: string; sizeMb: number }
+  | {
+      ok: true; token: string; name: string; sizeMb: number; durationMs: number; channels: number;
+      /** The name of one of this app's own stereo recordings (the layout question's default). */
+      looksLikeAppFile: boolean;
+      /** Picked during a live Solace call (that recording is replaced). */
+      forLive: boolean;
+    }
   | { ok: false; cancelled?: boolean; message?: string };
+
+/** D-171 (review R3 I3): how a two-channel import is read. "mixed" = both voices on both channels (mono path). */
+export type ImportLayout = "left-ta" | "right-ta" | "mixed";
 
 /** D-171: how an import ended. */
 export type ImportRunResult =
-  | { ok: true; id: string; audio: "stereo" | "mono"; fromFileTime: boolean; durationMs: number; linked: boolean }
+  | { ok: true; id: string; audio: "stereo" | "mono"; fromFileTime: boolean; durationMs: number; linked: boolean; sameOnBoth?: boolean }
   | { ok: false; message: string };
 
 /** D-171: the first turns of each chunk of a mono import (core/diarize.ts SpeakerPreview). */
 export interface SpeakerPreviewView {
-  chunks: { index: number; start_ms: number; end_ms: number; flipped: boolean; turns: { label: "A" | "B"; start_ms: number; text: string }[] }[];
+  chunks: { index: number; start_ms: number; end_ms: number; flipped: boolean; unsure: boolean; unclear: boolean; turns: { label: "A" | "B"; start_ms: number; text: string }[] }[];
 }
 
 /** D-171: the TA's answer to "Which voice is yours?". */
@@ -143,7 +152,9 @@ export interface RecorderApi {
   chooseImportFile(): Promise<ImportPick>;
   /** Stop and delete the live Solace recording so its session takes the import instead. */
   discardForImport(callId: string): Promise<{ ok: boolean; message?: string }>;
-  runImport(token: string, forceMono: boolean): Promise<ImportRunResult>;
+  runImport(token: string, layout: ImportLayout): Promise<ImportRunResult>;
+  /** The import dialog closed without importing (the attempt ends). */
+  cancelImport(): void;
   onImportProgress(listener: (step: string) => void): void;
   speakerPreview(id: string): Promise<SpeakerPreviewView | null>;
   chooseSpeakers(id: string, choice: SpeakerChoiceView): Promise<boolean>;
@@ -190,6 +201,7 @@ export const IPC = {
   chooseImportFile: "import:choose",
   discardForImport: "import:discard",
   runImport: "import:run",
+  cancelImport: "import:cancel",
   importProgress: "import:progress",
   speakerPreview: "speakers:preview",
   chooseSpeakers: "speakers:choose",

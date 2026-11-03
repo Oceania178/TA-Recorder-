@@ -557,3 +557,25 @@ button.inline {
 .speaker-chunk .letter.ta {
   color: var(--accent);
 }
+
+/* D-171 fix round 1: the layout question of a two-channel import */
+.import-file {
+  font-weight: 600;
+  margin: 8px 0 4px;
+}
+
+.import-layout {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  display: grid;
+  gap: 4px;
+  padding: 6px 12px;
+  margin: 8px 0;
+}
+
+.speaker-chunk .doubt {
+  color: var(--warn-text);
+  font-weight: 600;
+  font-size: 12px;
+  margin: 0 0 4px;
+}

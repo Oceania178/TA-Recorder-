@@ -42,6 +42,8 @@ export interface LabelledTurn {
 export interface ChunkTurn extends LabelledTurn {
   /** Index of the chunk the turn came from (the TA may swap a chunk's letters). */
   chunk: number;
+  /** A part Gemini refused: one "[không nghe rõ]" turn stands for it (review R3 m1). */
+  unclear?: true;
 }
 
 export interface Chunk {
@@ -62,10 +64,19 @@ export interface SpeakersData {
   turns: ChunkTurn[];
   /** Chunks whose letters disagree with the chunk before (alignChunks): offered as swapped by default. */
   flips: boolean[];
+  /** Chunks with no turn heard in their overlap with the chunk before: the letters may be either way (review R3 m2). */
+  unsure?: boolean[];
 }
 
 export interface SpeakerPreview {
-  chunks: (Chunk & { flipped: boolean; turns: { label: Letter; start_ms: number; text: string }[] })[];
+  chunks: (Chunk & {
+    flipped: boolean;
+    /** No overlap evidence: "Check this part". */
+    unsure: boolean;
+    /** Gemini refused this part: it is "[không nghe rõ]" in the transcript. */
+    unclear: boolean;
+    turns: { label: Letter; start_ms: number; text: string }[];
+  })[];
 }
 
 export function planChunks(totalMs: number): Chunk[] {
@@ -134,6 +145,11 @@ export function alignChunks(chunks: LabelledTurn[][]): boolean[] {
   return flips;
 }
 
+/** For each chunk: did the overlap with the chunk before have any turn both heard? (The first chunk: yes.) */
+export function overlapEvidence(chunks: LabelledTurn[][]): boolean[] {
+  return chunks.map((c, i) => i === 0 || c.some((t) => chunks[i - 1].some((u) => Math.abs(u.start_ms - t.start_ms) <= SAME_TURN_MS)));
+}
+
 /** Each chunk keeps its turns up to the middle of its overlap with the next one: no turn twice. */
 export function mergeChunkTurns(chunks: (Chunk & { turns: LabelledTurn[] })[]): ChunkTurn[] {
   const out: ChunkTurn[] = [];
@@ -165,6 +181,8 @@ export function speakerPreview(data: SpeakersData, turnsPerChunk = 3, maxChars =
       start_ms: c.start_ms,
       end_ms: c.end_ms,
       flipped: data.flips[i] === true,
+      unsure: data.unsure?.[i] === true,
+      unclear: data.turns.some((t) => t.chunk === c.index && t.unclear === true),
       turns: data.turns
         .filter((t) => t.chunk === c.index)
         .slice(0, turnsPerChunk)

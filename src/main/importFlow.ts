@@ -5,9 +5,10 @@
 //      one call or import at a time (D-39);
 //   2. the file is checked (type, size) and COPIED into <root>\.in-progress\<id>\<id>.import.<ext> — the
 //      original is never touched, and its name (it may hold a candidate's name) is kept nowhere;
-//   3. the copy is decoded to 16 kHz (decoderClient.ts decodeFileToPcm): two different channels = the app's
-//      stereo layout (left = TA, right = candidate); one channel, or the same sound on both = mono (the
-//      speakers are told apart by Gemini, core/diarize.ts); at most 2 hours;
+//   3. the copy is decoded to 16 kHz, streaming (decoderClient.ts decodeFileToPcm). A two-channel file is read
+//      as the TA said (review R3 I3): TA Call Recorder stereo (left = TA, or "I'm on the right"), or both
+//      voices mixed — the mono path, where Gemini tells the speakers apart (core/diarize.ts). One channel is
+//      always mono. Its length was checked (≤ 2 hours) when it was picked, before anything was decoded;
 //   4. the call's times: the file's modified time is taken as the end of the recording, the start = end −
 //      length (when that time is plausible: not in the future, not older than 30 days), else the import time;
 //   5. <id>.call.json and the retention marker are written — the marker's end time is the IMPORT time, so the
@@ -18,6 +19,7 @@ import { copyFile, mkdir, rename, rm, stat, utimes, writeFile } from "node:fs/pr
 import { basename, extname, join } from "node:path";
 import { formatIsoWithOffset, writeCallMarker } from "../core";
 import { NOTICE_FIRST_MESSAGE, type LinkedSession } from "./deepLinkFlow";
+import type { ImportLayout } from "./ipcTypes";
 
 export const IMPORT_EXTENSIONS = [".mp3", ".m4a", ".wav", ".webm", ".ogg", ".opus"];
 /** The decoder holds the whole decoded file in memory: these keep it to about 1 GB at most. */
@@ -86,16 +88,16 @@ export interface ImportDeps {
   tzOffsetMinutes(ms: number): number;
   appVersion: string;
   /** Decode `file` into 16 kHz PCM files in `outDir` (decoderClient.ts decodeFileToPcm). */
-  decode(file: string, outDir: string, id: string, forceMono: boolean): Promise<{ audio: ImportAudio; durationMs: number }>;
+  decode(file: string, outDir: string, id: string, layout: ImportLayout): Promise<{ audio: ImportAudio; durationMs: number; sameOnBoth?: boolean }>;
   enqueue(call: QueuedImport): Promise<void>;
   progress(step: string): void;
 }
 
 export type ImportResult =
-  | { ok: true; id: string; audio: ImportAudio; fromFileTime: boolean; durationMs: number }
+  | { ok: true; id: string; audio: ImportAudio; fromFileTime: boolean; durationMs: number; sameOnBoth?: boolean }
   | { ok: false; message: string };
 
-export async function runImport(d: ImportDeps, o: { source: string; session: LinkedSession | null; forceMono: boolean }): Promise<ImportResult> {
+export async function runImport(d: ImportDeps, o: { source: string; session: LinkedSession | null; layout: ImportLayout }): Promise<ImportResult> {
   const problem = d.dirProblem();
   if (problem) return { ok: false, message: problem };
   let st;
@@ -129,9 +131,9 @@ export async function runImport(d: ImportDeps, o: { source: string; session: Lin
   }
 
   d.progress("Reading the audio…");
-  let decoded: { audio: ImportAudio; durationMs: number };
+  let decoded: { audio: ImportAudio; durationMs: number; sameOnBoth?: boolean };
   try {
-    decoded = await d.decode(copy, tmp, id, o.forceMono);
+    decoded = await d.decode(copy, tmp, id, o.layout);
   } catch {
     return fail(IMPORT_MESSAGES.unreadable);
   }
@@ -147,6 +149,8 @@ export async function runImport(d: ImportDeps, o: { source: string; session: Lin
       call_id: id,
       source: "import",
       audio: decoded.audio,
+      /** How the TA said the channels are laid out (a retry decodes the copy the same way). */
+      layout: o.layout,
       started_at: iso(times.startedAtMs),
       ended_at: iso(times.endedAtMs),
       times_from_file: times.fromFile,
@@ -164,5 +168,5 @@ export async function runImport(d: ImportDeps, o: { source: string; session: Lin
   }
   await d.enqueue({ id, folder: final, startedAtMs: times.startedAtMs, endedAtMs: times.endedAtMs, session: o.session, audio: decoded.audio, imported: true });
   d.progress("Queued for transcription.");
-  return { ok: true, id, audio: decoded.audio, fromFileTime: times.fromFile, durationMs: decoded.durationMs };
+  return { ok: true, id, audio: decoded.audio, fromFileTime: times.fromFile, durationMs: decoded.durationMs, ...(decoded.sameOnBoth ? { sameOnBoth: true } : {}) };
 }

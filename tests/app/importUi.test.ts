@@ -3,7 +3,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { importButton, importDone, speakerSendLabel } from "../../src/renderer/importText";
+import { importButton, importDone, layoutHint, speakerSendLabel } from "../../src/renderer/importText";
 import { startHint } from "../../src/renderer/recorderCopy";
 
 const ROOT = join(__dirname, "..", "..");
@@ -43,7 +43,13 @@ describe("the window", () => {
     expect(html).toContain("MP3, M4A, WAV, WebM or OGG");
     expect(html).toContain("up to 2 hours (250 MB)");
     expect(html).toContain("deleted after 3 days");
-    expect(html).toContain('id="import-mixed"');
+    // review R3 I3: every two-channel file asks how it is laid out
+    expect(html).not.toContain('id="import-mixed"');
+    expect(html).toContain("Is this a TA Call Recorder stereo file (you on the left, the candidate on the right)?");
+    expect(html).toMatch(/name="import-layout" value="left-ta"[^>]*\/> Yes</);
+    expect(html).toMatch(/name="import-layout" value="mixed"[^>]*\/> No, both voices are mixed</);
+    expect(html).toMatch(/name="import-layout" value="right-ta"[^>]*\/> Yes, but I'm on the right</);
+    expect(html).toContain('id="import-run"');
     expect(html).toMatch(/id="import-status"[^>]*role="status"/);
     expect(html).toMatch(/id="import-live-warning"[^>]*hidden/);
     expect(html).toMatch(/id="speakers-dialog"[^>]*hidden/);
@@ -66,13 +72,16 @@ describe("the window", () => {
   });
 });
 
-describe("main keeps the import safe", () => {
-  it("the page never gets a path; no recording while importing; the live Solace recording is replaced, not kept", async () => {
-    const main = await read("src", "main", "main.ts");
-    expect(main).toContain("importPicks.set(token, file)");
-    expect(main).toMatch(/isRecording: \(\) => c\.guard\.isActive \|\| importing/);
-    expect(main).toMatch(/if \(importing\) return \{ ok: false, message: IMPORT_MESSAGES\.busy \}/);
-    expect(main).toContain("c.takeLiveSessionForImport(callId)");
-    expect(main).toContain("E2E?.importFile");
+describe("the layout hint and the voice dialog's warnings", () => {
+  it("the hint names this app's file names; otherwise it says what 'mixed' does", () => {
+    expect(layoutHint(true)).toBe("The file name looks like a TA Call Recorder recording.");
+    expect(layoutHint(false)).toBe('Not sure? Choose "No, both voices are mixed": Gemini then tells the two voices apart, and you check them before anything is sent.');
+  });
+
+  it("a doubtful part says 'Check this part'; a refused part says it could not be transcribed; Esc / Cancel end the attempt", async () => {
+    const src = await read("src", "renderer", "importUi.ts");
+    expect(src).toContain('"Check this part: the letters may be the other way round."');
+    expect(src).toContain('"This part could not be transcribed. It shows as [không nghe rõ] in the transcript."');
+    expect(src).toContain("api().cancelImport()");
   });
 });

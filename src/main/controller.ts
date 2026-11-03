@@ -32,6 +32,9 @@ export interface ControllerDeps {
   onCallSaved?: (call: SavedCall) => Promise<void> | void;
 }
 
+/** D-171, review R3 m3: the live recording replaced by an import could not be deleted right away. */
+export const LIVE_NOT_DELETED = "The live recording could not be deleted now. It is deleted when the app starts again and is never sent. Press Call & record in Solace again.";
+
 export class RecorderController {
   readonly guard = new SessionGuard();
   private writer: CallWriter | null = null;
@@ -299,12 +302,17 @@ export class RecorderController {
    * deleted (nothing of it is kept or sent) and its Solace session is handed to the import. Null when the
    * call is not a live Solace recording.
    */
-  async takeLiveSessionForImport(callId: unknown): Promise<LinkedSession | null> {
+  async takeLiveSessionForImport(callId: unknown): Promise<{ ok: true; session: LinkedSession } | { ok: false; message: string }> {
     const w = this.writerFor(callId);
     const session = this.writerSession;
-    if (!w || !session) return null;
-    await this.abortCall(callId);
-    return session;
+    if (!w || !session) return { ok: false, message: "There is no Solace recording to replace." };
+    try {
+      await this.abortCall(callId);
+    } catch {
+      // Marked discarded (chunkStore.ts): deleted at the next start, never recovered or sent (review R3 m3).
+      return { ok: false, message: LIVE_NOT_DELETED };
+    }
+    return { ok: true, session };
   }
 
   /** The live recording is linked to a Solace session (D-171: it may be replaced by an import). */

@@ -14,6 +14,7 @@ export class DecoderWindow implements DecoderTransport {
   private ready = false;
   private waiting: DecoderRequest[] = [];
   private listener: (r: DecoderReply) => void = () => undefined;
+  private goneListener: () => void = () => undefined;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly rendererDir: string, private readonly preloadPath: string) {
@@ -33,6 +34,11 @@ export class DecoderWindow implements DecoderTransport {
 
   onReply(listener: (r: DecoderReply) => void): void {
     this.listener = listener;
+  }
+
+  /** Review R3 m4: the page crashed — the client fails its waiting requests at once, not after the time-out. */
+  onGone(listener: () => void): void {
+    this.goneListener = listener;
   }
 
   send(req: DecoderRequest): void {
@@ -59,7 +65,10 @@ export class DecoderWindow implements DecoderTransport {
         spellcheck: false,
       },
     });
-    win.webContents.on("render-process-gone", () => this.close());
+    win.webContents.on("render-process-gone", () => {
+      this.close();
+      this.goneListener();
+    });
     void win.loadFile(join(this.rendererDir, "decoder.html"));
     this.win = win;
     return win;

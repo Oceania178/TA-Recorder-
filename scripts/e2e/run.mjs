@@ -475,14 +475,20 @@ async function run() {
     utimesSync(IMPORT_FILE, t, t);
     return Math.round(t * 1000);
   };
-  const importInApp = async (label) => {
+  /** Opens the dialog, picks the file (--e2e-import-file), answers the layout question when there is one, imports. */
+  const importInApp = async (label, layout = null) => {
     await page.eval(`document.getElementById("btn-import").click(), true`);
     await waitFor(`${label}: import dialog`, () => page.eval(`!document.getElementById("import-dialog").hidden`), 10_000, 200);
     await page.eval(`document.getElementById("import-choose").click(), true`);
-    return waitFor(`${label}: import done`, async () => {
+    await waitFor(`${label}: file read`, () => page.eval(`!document.getElementById("import-run").hidden`), 30_000, 200);
+    const question = await page.eval(`(() => { const q = document.getElementById("import-layout"); return q.hidden ? null : document.querySelector('input[name="import-layout"]:checked')?.value ?? "none"; })()`);
+    if (layout) await page.eval(`document.querySelector('input[name="import-layout"][value="${layout}"]').click(), true`);
+    await page.eval(`document.getElementById("import-run").click(), true`);
+    const status = await waitFor(`${label}: import done`, async () => {
       const s = await page.eval(`(() => { const e = document.getElementById("import-status"); return e.classList.contains("pass") || e.classList.contains("notyet") ? e.className + "|" + e.textContent : null; })()`);
       return s;
-    }, 60_000, 300);
+    }, 120_000, 300);
+    return { status, question };
   };
   // 12a. stereo (left = TA, right = candidate), recorded two hours ago
   const sD = await api("POST", "/api/call-recorder/sessions", { cookie: ta.cookie, body: { application_id: app2.id, dial_mode: "self_dial" } });
@@ -491,8 +497,8 @@ async function run() {
   await sendLinkToRunningApp(sD.json.deep_link);
   await waitFor("D recording", async () => (await appState()) === "recording", 30_000, 200);
   const importButtonD = await page.eval(`(() => { const b = document.getElementById("btn-import"); return b.hidden ? null : b.textContent; })()`);
-  const statusD = await importInApp("import D");
-  check(12, "during a live Solace call the window offers 'Import a recording instead…'; the stereo import is accepted", importButtonD === "Import a recording instead…" && /^wizard-status pass\|Imported\./.test(statusD), { button: importButtonD, status: statusD });
+  const { status: statusD, question: questionD } = await importInApp("import D", "left-ta");
+  check(12, "during a live Solace call the window offers 'Import a recording instead…'; a two-channel file asks how it is laid out (default: mixed); 'Yes' → accepted", importButtonD === "Import a recording instead…" && questionD === "mixed" && /^wizard-status pass\|Imported\./.test(statusD), { button: importButtonD, question_default: questionD, status: statusD });
   const jobD = await waitStage(D, ["sent", "failed"], 300_000);
   const folderD = join(RECORDINGS, D);
   const filesD = existsSync(folderD) ? readdirSync(folderD) : [];
@@ -509,9 +515,9 @@ async function run() {
   writeImport(toneWav([[[330, 0.3, 2.5], [660, 3.0, 5.5], [440, 6.0, 8.0]]], 9), 10 / 60);
   await sendLinkToRunningApp(sE.json.deep_link);
   await waitFor("E recording", async () => (await appState()) === "recording", 30_000, 200);
-  const statusE = await importInApp("import E");
+  const { status: statusE, question: questionE } = await importInApp("import E");
   const waitingE = await waitStage(E, ["transcribed", "failed"], 300_000);
-  check(12, "a mono import is transcribed with speaker labels and waits for the TA's voice choice (nothing sent yet)", /Gemini now tells the two voices apart/.test(statusE) && waitingE.speakersNeeded === true && gemini.log.some((e) => e.kind === "diarize") && !(await prisma.callRecord.findUnique({ where: { session_id: E } })), { status: statusE, stage: waitingE.stage, speakersNeeded: waitingE.speakersNeeded });
+  check(12, "a one-channel import asks no layout question, is transcribed with speaker labels and waits for the TA's voice choice (nothing sent yet)", questionE === null && /Gemini now tells the two voices apart/.test(statusE) && waitingE.speakersNeeded === true && gemini.log.some((e) => e.kind === "diarize") && !(await prisma.callRecord.findUnique({ where: { session_id: E } })), { status: statusE, stage: waitingE.stage, speakersNeeded: waitingE.speakersNeeded });
   await page.eval(`window.__taRecorderCommand("speakers"), true`);
   await waitFor("voice dialog", () => page.eval(`!document.getElementById("speakers-dialog").hidden`), 10_000, 200);
   const preview = await page.eval(`Array.from(document.querySelectorAll("#speakers-chunks li")).map((l) => l.textContent)`);

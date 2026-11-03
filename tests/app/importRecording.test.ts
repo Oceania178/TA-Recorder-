@@ -10,8 +10,6 @@ import { sweepRecordings, readCallMarker } from "../../src/core/retention";
 import { followView } from "../../src/main/barFollow";
 import { OutcomeWatcher } from "../../src/main/callOutcomes";
 import { callRows, type CallRow } from "../../src/main/callsView";
-import { decodeFileToPcm, type DecoderReply, type DecoderRequest } from "../../src/main/decoderClient";
-import { DecoderClient } from "../../src/main/decoderClient";
 import { readE2eHooks } from "../../src/main/e2eHooks";
 import {
   checkImportFile, importGate, importTimes, IMPORT_EXTENSIONS, MAX_IMPORT_BYTES, MAX_IMPORT_MS, runImport, type ImportDeps,
@@ -100,7 +98,7 @@ const session = { sessionId: "sess-import-0001", dialMode: "self_dial" as const,
 describe("runImport: copy, marker, decode, queue", () => {
   it("copies the file into <root>/<session id>/, writes the marker and the call file, and queues the call with the file's times", async () => {
     const d = deps();
-    const r = await runImport(d, { source: await makeSource("Ghi âm 0901.m4a"), session, forceMono: false });
+    const r = await runImport(d, { source: await makeSource("Ghi âm 0901.m4a"), session, layout: "left-ta" });
     expect(r).toEqual({ ok: true, id: "sess-import-0001", audio: "stereo", fromFileTime: true, durationMs: 1_200_000 });
     const folder = path.join(d.root, "sess-import-0001");
     const files = (await readdir(folder)).sort();
@@ -118,32 +116,32 @@ describe("runImport: copy, marker, decode, queue", () => {
 
   it("a mono file is queued as mono; without a session the call gets a local id", async () => {
     const d = deps({ decode: async (_f, outDir, id) => { await writeFile(path.join(outDir, `${id}.mono.s16`), Buffer.alloc(32)); return { audio: "mono", durationMs: 60_000 }; } });
-    const r = await runImport(d, { source: await makeSource("rec.mp3"), session: null, forceMono: false });
+    const r = await runImport(d, { source: await makeSource("rec.mp3"), session: null, layout: "left-ta" });
     expect(r).toMatchObject({ ok: true, id: "20261103-100000-abcdef", audio: "mono" });
     expect(d.queued[0]).toMatchObject({ id: "20261103-100000-abcdef", session: null, audio: "mono", imported: true });
   });
 
   it("refuses an unusable recordings folder (OneDrive), a call already recorded, a bad file — and leaves nothing behind", async () => {
     const one = deps({ dirProblem: () => "This folder is inside OneDrive, which would copy call recordings to the cloud. Choose a folder outside OneDrive." });
-    expect(await runImport(one, { source: await makeSource("a.mp3"), session, forceMono: false })).toEqual({ ok: false, message: "This folder is inside OneDrive, which would copy call recordings to the cloud. Choose a folder outside OneDrive." });
+    expect(await runImport(one, { source: await makeSource("a.mp3"), session, layout: "left-ta" })).toEqual({ ok: false, message: "This folder is inside OneDrive, which would copy call recordings to the cloud. Choose a folder outside OneDrive." });
     const twice = deps({ hasCall: () => true });
-    expect(await runImport(twice, { source: await makeSource("a.mp3"), session, forceMono: false })).toEqual({ ok: false, message: 'This Solace call has already been recorded. Press "Call & record" in Solace again for a new call.' });
-    expect(await runImport(deps(), { source: await makeSource("a.docx"), session, forceMono: false })).toMatchObject({ ok: false, message: expect.stringMatching(/can't be imported/) });
+    expect(await runImport(twice, { source: await makeSource("a.mp3"), session, layout: "left-ta" })).toEqual({ ok: false, message: 'This Solace call has already been recorded. Press "Call & record" in Solace again for a new call.' });
+    expect(await runImport(deps(), { source: await makeSource("a.docx"), session, layout: "left-ta" })).toMatchObject({ ok: false, message: expect.stringMatching(/can't be imported/) });
     expect(existsSync(path.join(dir, "Recordings", "sess-import-0001"))).toBe(false);
   });
 
   it("an unreadable or too long recording is refused and its copy deleted", async () => {
     const bad = deps({ decode: async () => { throw new Error("decode_error"); } });
-    expect(await runImport(bad, { source: await makeSource("a.mp3"), session, forceMono: false })).toEqual({ ok: false, message: "The app could not read the audio in this file. Try another file, or export the recording again as MP3 or WAV." });
+    expect(await runImport(bad, { source: await makeSource("a.mp3"), session, layout: "left-ta" })).toEqual({ ok: false, message: "The app could not read the audio in this file. Try another file, or export the recording again as MP3 or WAV." });
     const long = deps({ decode: async () => ({ audio: "stereo", durationMs: MAX_IMPORT_MS + 1000 }) });
-    expect(await runImport(long, { source: await makeSource("b.mp3"), session, forceMono: false })).toEqual({ ok: false, message: "This recording is longer than 2 hours. Import a recording of up to 2 hours." });
+    expect(await runImport(long, { source: await makeSource("b.mp3"), session, layout: "left-ta" })).toEqual({ ok: false, message: "This recording is longer than 2 hours. Import a recording of up to 2 hours." });
     const leftovers = existsSync(path.join(dir, "Recordings")) ? await readdir(path.join(dir, "Recordings"), { recursive: true }) : [];
     expect(leftovers.filter((n) => String(n).includes("sess-import-0001"))).toEqual([]);
   });
 
   it("the copy is deleted 3 days after the IMPORT by the usual sweep, even when the recording is older", async () => {
     const d = deps();
-    await runImport(d, { source: await makeSource("old.wav", 100, Date.parse("2026-10-25T02:00:00Z")), session, forceMono: false });
+    await runImport(d, { source: await makeSource("old.wav", 100, Date.parse("2026-10-25T02:00:00Z")), session, layout: "left-ta" });
     const imported = Date.parse("2026-11-03T03:00:00Z");
     const keep = await sweepRecordings({ root: d.root, nowMs: imported + 71 * 3600_000, isBusy: () => false });
     expect(keep).toMatchObject({ deleted: 0, kept: 1 });
@@ -154,62 +152,8 @@ describe("runImport: copy, marker, decode, queue", () => {
 
   it("reports progress in plain words", async () => {
     const steps: string[] = [];
-    await runImport(deps({ progress: (s) => steps.push(s) }), { source: await makeSource("a.mp3"), session, forceMono: false });
+    await runImport(deps({ progress: (s) => steps.push(s) }), { source: await makeSource("a.mp3"), session, layout: "left-ta" });
     expect(steps).toEqual(["Copying the file…", "Reading the audio…", "Queued for transcription."]);
-  });
-});
-
-// ---------------------------------------------------------------- decoding any format in the decoder page
-function fakePage(channels: Float32Array[], o: { fail?: boolean } = {}) {
-  let listener: (r: DecoderReply) => void = () => undefined;
-  const seen: string[] = [];
-  return {
-    seen,
-    transport: {
-      onReply: (l: (r: DecoderReply) => void) => { listener = l; },
-      send: (req: DecoderRequest) => {
-        seen.push(req.kind);
-        queueMicrotask(() => {
-          if (req.kind === "loadFile") {
-            if (o.fail) return listener({ sid: req.sid, ok: false, error: "decode_error" });
-            const same = channels.length === 2 && channels[0].every((v, i) => v === channels[1][i]);
-            return listener({ sid: req.sid, ok: true, info: { channels: channels.length, frames: channels[0].length, similar: same } });
-          }
-          if (req.kind === "readFile") {
-            const src = req.channel === -1 ? channels[0].map((v, i) => (v + (channels[1] ?? channels[0])[i]) / 2) : channels[req.channel];
-            return listener({ sid: req.sid, ok: true, pcm: src.slice(req.start, req.start + req.count) });
-          }
-          listener({ sid: req.sid, ok: true });
-        });
-      },
-    },
-  };
-}
-
-describe("decodeFileToPcm: stereo stays two channels, mono (or a duplicated channel) becomes one", () => {
-  const tone = (n: number, f: number) => Float32Array.from({ length: n }, (_, i) => Math.sin(i / f) * 0.5);
-
-  it("stereo → <id>.left.s16 and <id>.right.s16 (left = TA, right = candidate, as the app records)", async () => {
-    const p = fakePage([tone(40_000, 3), tone(40_000, 7)]);
-    const r = await decodeFileToPcm(new DecoderClient(p.transport), new Uint8Array([1, 2, 3]), dir, "sess-x-000001", { forceMono: false, blockSamples: 16_000 });
-    expect(r).toEqual({ audio: "stereo", durationMs: 2500 });
-    expect((await stat(path.join(dir, "sess-x-000001.left.s16"))).size).toBe(80_000);
-    expect((await stat(path.join(dir, "sess-x-000001.right.s16"))).size).toBe(80_000);
-    expect(p.seen[0]).toBe("loadFile");
-    expect(p.seen.at(-1)).toBe("close");
-  });
-
-  it("one channel, the same signal on both, or 'both voices are mixed' → <id>.mono.s16", async () => {
-    const one = await decodeFileToPcm(new DecoderClient(fakePage([tone(16_000, 3)]).transport), new Uint8Array([1]), dir, "mono-a-000001", { forceMono: false });
-    expect(one).toEqual({ audio: "mono", durationMs: 1000 });
-    const dup = tone(16_000, 3);
-    expect((await decodeFileToPcm(new DecoderClient(fakePage([dup, dup]).transport), new Uint8Array([1]), dir, "mono-b-000001", { forceMono: false })).audio).toBe("mono");
-    expect((await decodeFileToPcm(new DecoderClient(fakePage([tone(16_000, 3), tone(16_000, 9)]).transport), new Uint8Array([1]), dir, "mono-c-000001", { forceMono: true })).audio).toBe("mono");
-    expect((await stat(path.join(dir, "mono-c-000001.mono.s16"))).size).toBe(32_000);
-  });
-
-  it("a file the page cannot decode is an error", async () => {
-    await expect(decodeFileToPcm(new DecoderClient(fakePage([tone(10, 3)], { fail: true }).transport), new Uint8Array([1]), dir, "bad-a-000001", { forceMono: false })).rejects.toThrow();
   });
 });
 

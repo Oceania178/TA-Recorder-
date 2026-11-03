@@ -78,6 +78,8 @@ function setState(next: RecorderState): void {
   report();
 }
 
+let lastDiscardError: string | null = null;
+
 /** D-171: the TA replaces this live Solace recording by an imported file: stop it, delete it, keep the session. */
 async function discardForImport(): Promise<boolean> {
   if ((state !== "recording" && state !== "paused") || !session || !callId || linkedNow !== true) return false;
@@ -90,7 +92,13 @@ async function discardForImport(): Promise<boolean> {
     // the recording is thrown away anyway
   }
   await Promise.all(Object.values(chains)).catch(() => undefined);
-  const r = await api().discardForImport(id);
+  let r: { ok: boolean; message?: string };
+  try {
+    r = await api().discardForImport(id);
+  } catch {
+    r = { ok: false, message: "The live recording could not be replaced. Press Call & record in Solace again." };
+  }
+  lastDiscardError = r.ok ? null : (r.message ?? null);
   session = null;
   callId = null;
   levels = [0, 0];
@@ -357,6 +365,7 @@ async function init(): Promise<void> {
   initImportUi({
     liveLinked: () => linkedNow === true && (state === "recording" || state === "paused"),
     discardLive: discardForImport,
+    lastError: () => lastDiscardError,
     afterImport: () => void refreshCalls(),
   });
   $("btn-import").addEventListener("click", () => openImportDialog());

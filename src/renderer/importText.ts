@@ -1,5 +1,5 @@
 // D-171 "Import a recording": the words and button states of the import, as plain functions (tested).
-import type { RecorderState } from "../main/ipcTypes";
+import type { ImportLayout, RecorderState } from "../main/ipcTypes";
 
 /**
  * Idle: shown only in Test mode (an import without Solace is Local only, D-165). During a Solace call
@@ -13,8 +13,9 @@ export function importButton(state: RecorderState, linked: boolean | null, testM
   return { visible: testMode, label: "Import a recording…", enabled: true };
 }
 
-export function importDone(r: { audio: "stereo" | "mono"; fromFileTime: boolean }, linked: boolean): string {
-  const time = r.fromFileTime ? "" : " The file's own time could not be used, so the import time is the call's time.";
+export function importDone(r: { audio: "stereo" | "mono"; fromFileTime: boolean; sameOnBoth?: boolean }, linked: boolean): string {
+  const same = r.sameOnBoth ? " Both channels carried the same sound, so it is treated as mixed." : "";
+  const time = (r.fromFileTime ? "" : " The file's own time could not be used, so the import time is the call's time.") + same;
   if (r.audio === "mono") {
     return linked
       ? `Imported. Gemini now tells the two voices apart; then choose which one is yours, and it is sent to Solace.${time}`
@@ -27,4 +28,18 @@ export function importDone(r: { audio: "stereo" | "mono"; fromFileTime: boolean 
 
 export function speakerSendLabel(linked: boolean): string {
   return linked ? "Send to Solace" : "Save the transcript";
+}
+
+/**
+ * Review R3 I3: a two-channel file is read as TA-left / candidate-right only when the TA says so. The question's
+ * default is "both voices mixed" unless the file has the name of one of this app's own recordings.
+ */
+export function layoutDefault(looksLikeAppFile: boolean): ImportLayout {
+  return looksLikeAppFile ? "left-ta" : "mixed";
+}
+
+export function layoutHint(looksLikeAppFile: boolean): string {
+  return looksLikeAppFile
+    ? "The file name looks like a TA Call Recorder recording."
+    : 'Not sure? Choose "No, both voices are mixed": Gemini then tells the two voices apart, and you check them before anything is sent.';
 }

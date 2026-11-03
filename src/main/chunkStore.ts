@@ -29,6 +29,9 @@ export async function pathExists(path: string): Promise<boolean> {
   }
 }
 
+/** In an .in-progress call folder: this recording was thrown away; recovery deletes it, never recovers it. */
+export const DISCARDED_FLAG = "discarded.flag";
+
 export class CallWriter {
   private queue: Promise<unknown> = Promise.resolve();
   private finished = false;
@@ -126,10 +129,21 @@ export class CallWriter {
     });
   }
 
-  /** Used when a start fails before any audio: removes the in-progress folder. */
+  /**
+   * Used when a start fails before any audio, and when the TA replaces a live Solace recording by an import
+   * (D-171): removes the in-progress folder. If it cannot be removed (a locked file), it is marked DISCARDED_FLAG
+   * so recovery deletes it at the next start and never turns it into a call (review R3 m3).
+   */
   abort(): Promise<void> {
     this.finished = true;
-    return this.enqueue(() => rm(this.tempDir, { recursive: true, force: true }));
+    return this.enqueue(async () => {
+      try {
+        await rm(this.tempDir, { recursive: true, force: true });
+      } catch (e) {
+        await writeFile(join(this.tempDir, DISCARDED_FLAG), "").catch(() => undefined);
+        throw e;
+      }
+    });
   }
 }
 
@@ -141,3 +155,4 @@ export async function renamePartsToFinal(dir: string, callId: string): Promise<v
     if (await pathExists(part)) await rename(part, join(dir, names[t]));
   }
 }
+

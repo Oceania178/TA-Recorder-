@@ -160,20 +160,24 @@
         <ul class="import-limits">
           <li>MP3, M4A, WAV, WebM or OGG, up to 2 hours (250 MB).</li>
           <li>The file is copied into the recordings folder and deleted after 3 days. The original is not changed.</li>
-          <li>A stereo file of this app: left = you, right = the candidate. Any other file: Gemini tells the two voices apart, then you choose which one is yours.</li>
-          <li>Two voices only. The call's time is taken from the file when possible.</li>
+          <li>A two-channel file: you say whether it is a TA Call Recorder file (you on the left) or both voices mixed. Mixed or one-channel files: Gemini tells the two voices apart, then you choose which one is yours.</li>
+          <li>Two voices only. The call's time is taken from the file when possible. Nothing is decoded before the file's length is checked.</li>
         </ul>
         <p class="message warn" id="import-live-warning" hidden>The live recording of this Solace call stops and is deleted. The imported file is sent to Solace for this call instead.</p>
-        <label class="field checkbox">
-          <input type="checkbox" id="import-mixed" />
-          <span>
-            Both voices are on both channels
-            <small>Tick this for a stereo file that is not from TA Call Recorder (e.g. a phone recorder app). Gemini then tells the two voices apart.</small>
-          </span>
-        </label>
+        <div id="import-picked" hidden>
+          <p class="import-file" id="import-file"></p>
+          <fieldset class="import-layout" id="import-layout" hidden>
+            <legend>Is this a TA Call Recorder stereo file (you on the left, the candidate on the right)?</legend>
+            <label><input type="radio" name="import-layout" value="left-ta" /> Yes</label>
+            <label><input type="radio" name="import-layout" value="mixed" /> No, both voices are mixed</label>
+            <label><input type="radio" name="import-layout" value="right-ta" /> Yes, but I'm on the right</label>
+            <p class="hint" id="import-layout-hint"></p>
+          </fieldset>
+        </div>
         <p class="wizard-status" id="import-status" role="status"></p>
         <div class="buttons left">
           <button id="import-choose" class="primary" type="button">Choose a file…</button>
+          <button id="import-run" class="primary" type="button" hidden>Import</button>
         </div>
       </section>
     </div>

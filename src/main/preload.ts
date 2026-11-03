@@ -1,7 +1,7 @@
 // The only bridge between the recorder pages and the app. Pages get these few functions, nothing else
 // (contextIsolation on, nodeIntegration off, sandboxed).
 import { contextBridge, ipcRenderer } from "electron";
-import { IPC, type AppMessage, type Command, type MicProcessing, type RecorderApi, type SpeakerChoiceView, type StatusReport, type Track } from "./ipcTypes";
+import { IPC, type AppMessage, type Command, type MicProcessing, type ImportLayout, type RecorderApi, type SpeakerChoiceView, type StatusReport, type Track } from "./ipcTypes";
 
 const api: RecorderApi = {
   beginCall: (micProcessing: MicProcessing, intent: "local" | "linked") => ipcRenderer.invoke(IPC.beginCall, micProcessing, intent),
@@ -41,7 +41,8 @@ const api: RecorderApi = {
   sendBarCommand: (command: Command | "open" | "retry" | "close" | "import") => ipcRenderer.send(IPC.barCommand, command),
   chooseImportFile: () => ipcRenderer.invoke(IPC.chooseImportFile),
   discardForImport: (callId: string) => ipcRenderer.invoke(IPC.discardForImport, callId),
-  runImport: (token: string, forceMono: boolean) => ipcRenderer.invoke(IPC.runImport, token, forceMono),
+  runImport: (token: string, layout: ImportLayout) => ipcRenderer.invoke(IPC.runImport, token, layout),
+  cancelImport: () => ipcRenderer.send(IPC.cancelImport),
   onImportProgress: (listener: (step: string) => void) => {
     ipcRenderer.on(IPC.importProgress, (_event, step: string) => listener(typeof step === "string" ? step : ""));
   },

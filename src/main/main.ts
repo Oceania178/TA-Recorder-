@@ -10,7 +10,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { tmpdir, userInfo } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, extname, join, resolve } from "node:path";
 import { createServer } from "node:http";
 import { checkTicket, DEFAULT_GEMINI_MODEL, type FetchLike } from "../core";
 import { AppLog } from "./appLog";
@@ -22,7 +22,9 @@ import { ensureCleanupTask, keepCleanupTask, type CommandRunner } from "./cleanu
 import { RecorderController } from "./controller";
 import { DecoderClient, decodeFileToPcm, decodeWebmToPcmFile } from "./decoderClient";
 import { makeCallId } from "./callId";
-import { checkImportFile, importGate, IMPORT_MESSAGES, runImport } from "./importFlow";
+import { checkImportFile, IMPORT_MESSAGES, runImport } from "./importFlow";
+import { ImportCoordinator } from "./importCoordinator";
+import { inspectAudio, looksLikeAppRecording } from "./audioDemux";
 import { DecoderWindow } from "./decoderWindow";
 import { readE2eHooks } from "./e2eHooks";
 import { DeepLinkFlow, type LinkedSession, type LinkOutcome } from "./deepLinkFlow";
@@ -105,12 +107,9 @@ const FOLLOW_UNQUEUED_MS = 15_000;
 /** P3 + D-171: the followed call waits for the TA's voice choice (the bar's open button opens the chooser). */
 let followNeedsSpeakers = false;
 // ---- D-171 Import a recording ----
-/** An import is being copied / decoded: no recording or other import meanwhile (one call at a time). */
-let importing = false;
-/** The Solace session of a live recording the TA replaced by an import (kept until the import is queued). */
-let importSession: LinkedSession | null = null;
-/** The file the TA picked, by an opaque token: the page never sees a path. */
-const importPicks = new Map<string, string>();
+/** One import attempt at a time; its Solace session never outlives it (importCoordinator.ts, review R3 I1). */
+let importer: ImportCoordinator | null = null;
+const importing = () => importer?.busy === true;
 const rendererReadyPromise = new Promise<void>((done) => (rendererReady = done));
 
 function main(): void {
@@ -296,8 +295,8 @@ async function openJobs(c: RecorderController, s: SecretStore): Promise<CallJobs
     getBaseUrl: () => c.appSettings.solaceBaseUrl,
     getModel: () => c.appSettings.geminiModel ?? DEFAULT_GEMINI_MODEL,
     fetch: netFetch,
-    openPcm: makeOpenPcm((webm, pcm) => decodeWebmToPcmFile(client, webm, pcm), (file, outDir, id) => redecodeImport(client, file, outDir, id, false)),
-    openMono: makeOpenMono((file, outDir, id) => redecodeImport(client, file, outDir, id, true)),
+    openPcm: makeOpenPcm((webm, pcm) => decodeWebmToPcmFile(client, webm, pcm), (file, outDir, id) => redecodeImport(client, file, outDir, id)),
+    openMono: makeOpenMono((file, outDir, id) => redecodeImport(client, file, outDir, id)),
     afterTranscript: (job) => deletePcmFiles(job.folder, job.id),
     appVersion: app.getVersion(),
     dev: DEV,
@@ -361,14 +360,14 @@ function wireDeepLinks(c: RecorderController): void {
   if (!s) return;
   const flow = new DeepLinkFlow({
     noticeAccepted: () => c.noticeAccepted(),
-    isRecording: () => c.guard.isActive || importing,
+    isRecording: () => c.guard.isActive || importing(),
     getBaseUrl: () => c.appSettings.solaceBaseUrl,
     checkTicket: (baseUrl, sessionId, ticket) => checkTicket({ fetch: netFetch, dev: DEV }, baseUrl, sessionId, ticket),
     tickets: { held: (id) => s.heldTicket(id), save: (id, ticket, held) => s.saveTicket(id, ticket, held) },
     alreadyRecorded: (id) => c.hasCall(id) || !!jobs?.get(id),
     start: (session) => {
       c.armLinkedCall(session);
-      importSession = null; // a new Solace call: an earlier, unused import session is dropped
+      importer?.newCallStarted(); // a new Solace call: any import attempt ends
       // P2: Solace stays in front; the floating bar shows the recording. A failed start shows the window.
       linkWindow.linkStarted();
       if (linkTimer) clearTimeout(linkTimer);
@@ -624,7 +623,7 @@ export function requestStart(): void {
   requestLocalStart({
     noticeAccepted: () => c.noticeAccepted(),
     testMode: () => c.appSettings.testMode,
-    isRecording: () => c.guard.isActive || importing,
+    isRecording: () => c.guard.isActive || importing(),
     disarm: () => c.disarm(),
     start: () => {
       if (recorderWin) sendCommandToRecorder(recorderWin, "start");
@@ -735,7 +734,8 @@ function registerIpc(c: RecorderController): void {
   const text = (v: unknown) => (typeof v === "string" ? v : "");
 
   handle(IPC.beginCall, (mic, intent) => {
-    if (importing) return { ok: false, message: IMPORT_MESSAGES.busy };
+    if (importing()) return { ok: false, message: IMPORT_MESSAGES.busy };
+    importer?.newCallStarted(); // a live start (local or Solace) ends any import attempt
     const m = (mic ?? {}) as Record<string, unknown>;
     const micProcessing = { echoCancellation: m.echoCancellation === true, noiseSuppression: m.noiseSuppression === true, autoGainControl: m.autoGainControl === true };
     return c.beginCall(micProcessing, intent === "linked" ? "linked" : "local");
@@ -803,59 +803,42 @@ function registerIpc(c: RecorderController): void {
   // Recent calls.
   handle(IPC.listCalls, () => currentRows());
 
-  // D-171 Import a recording.
-  handle(IPC.chooseImportFile, async () => {
-    const live = c.liveSession !== null && (c.guard.state === "recording" || c.guard.state === "paused");
-    const gate = importGate({
-      noticeAccepted: c.noticeAccepted(),
-      testMode: c.appSettings.testMode,
-      linked: live || importSession !== null,
-      busy: importing || (c.guard.isActive && !live),
-    });
-    if (gate) return { ok: false, message: gate };
-    let file = E2E?.importFile ?? null;
-    if (!file) {
-      if (!recorderWin) return { ok: false, cancelled: true };
+  // D-171 Import a recording: one attempt at a time (importCoordinator.ts).
+  const imp = new ImportCoordinator({
+    state: () => {
+      const live = c.liveSession !== null && (c.guard.state === "recording" || c.guard.state === "paused");
+      return { noticeAccepted: c.noticeAccepted(), testMode: c.appSettings.testMode, liveLinkedCallId: live ? c.activeCallId : null, recording: c.guard.isActive };
+    },
+    pickFile: async () => {
+      if (E2E?.importFile) return E2E.importFile;
+      if (!recorderWin) return null;
       const picked = await dialog.showOpenDialog(recorderWin, {
         title: "Choose a recording to import",
         properties: ["openFile"],
         filters: [{ name: "Recordings (MP3, M4A, WAV, WebM, OGG)", extensions: ["mp3", "m4a", "wav", "webm", "ogg", "opus"] }],
       });
-      if (picked.canceled || !picked.filePaths[0]) return { ok: false, cancelled: true };
-      file = picked.filePaths[0];
-    }
-    let size = 0;
-    try {
-      const st = await stat(file);
-      size = st.isFile() ? st.size : 0;
-    } catch {
-      return { ok: false, message: IMPORT_MESSAGES.unreadable };
-    }
-    const check = checkImportFile({ name: basename(file), size });
-    if (!check.ok) return { ok: false, message: check.message };
-    importPicks.clear();
-    const token = randomUUID();
-    importPicks.set(token, file);
-    return { ok: true, token, name: basename(file), sizeMb: Math.max(0.1, Math.round((size / 1048576) * 10) / 10) };
-  });
-  handle(IPC.discardForImport, async (callId) => {
-    const session = await c.takeLiveSessionForImport(callId);
-    if (!session) return { ok: false, message: "There is no Solace recording to replace." };
-    importSession = session;
-    log.event("import.live_discarded", {});
-    return { ok: true };
-  });
-  handle(IPC.runImport, async (token, forceMono) => {
-    const file = typeof token === "string" ? importPicks.get(token) : undefined;
-    if (!file) return { ok: false, message: "Choose the file again." };
-    const gate = importGate({ noticeAccepted: c.noticeAccepted(), testMode: c.appSettings.testMode, linked: importSession !== null, busy: importing || c.guard.isActive });
-    if (gate) return { ok: false, message: gate };
-    const client = decoder;
-    const j = jobs;
-    if (!client || !j) return { ok: false, message: "The transcription queue is not open. Restart the app, then import again." };
-    importing = true;
-    const session = importSession;
-    try {
+      return picked.canceled || !picked.filePaths[0] ? null : picked.filePaths[0];
+    },
+    inspect: async (file) => {
+      let size = 0;
+      try {
+        const st = await stat(file);
+        size = st.isFile() ? st.size : 0;
+      } catch {
+        return { ok: false, message: IMPORT_MESSAGES.unreadable };
+      }
+      const check = checkImportFile({ name: basename(file), size });
+      if (!check.ok) return check;
+      // Read, not decoded (review R3 I2): the length and channels come from the file's own structure.
+      const info = inspectAudio(new Uint8Array(await readFile(file)), check.ext);
+      if (!info.ok) return info;
+      return { ok: true, name: basename(file), sizeMb: Math.max(0.1, Math.round((size / 1048576) * 10) / 10), durationMs: info.durationMs, channels: info.channels, looksLikeAppFile: looksLikeAppRecording(basename(file)) };
+    },
+    takeLiveSession: (callId) => c.takeLiveSessionForImport(callId),
+    run: async (o) => {
+      const client = decoder;
+      const j = jobs;
+      if (!client || !j) return { ok: false, message: "The transcription queue is not open. Restart the app, then import again." };
       const r = await runImport({
         root: c.recordingsDir(),
         dirProblem: () => c.dirProblem(),
@@ -864,7 +847,7 @@ function registerIpc(c: RecorderController): void {
         now: () => Date.now(),
         tzOffsetMinutes: (ms) => -new Date(ms).getTimezoneOffset(),
         appVersion: app.getVersion(),
-        decode: async (f, outDir, id, mono) => decodeFileToPcm(client, new Uint8Array(await readFile(f)), outDir, id, { forceMono: mono }),
+        decode: async (f, outDir, id, layout) => decodeFileToPcm(client, new Uint8Array(await readFile(f)), extname(f), outDir, id, { layout }),
         enqueue: async (call) => {
           startFollow(call.id);
           await j.enqueue(call);
@@ -873,20 +856,24 @@ function registerIpc(c: RecorderController): void {
         progress: (step) => {
           if (recorderWin && !recorderWin.isDestroyed()) recorderWin.webContents.send(IPC.importProgress, step);
         },
-      }, { source: file, session, forceMono: forceMono === true });
-      log.event("import.done", { ok: r.ok, audio: r.ok ? r.audio : null, linked: session !== null, file_time: r.ok ? r.fromFileTime : null });
+      }, o);
       if (r.ok) {
-        importSession = null;
-        importPicks.clear();
         if (barWin && !barWin.isDestroyed() && !barWin.isVisible()) barWin.showInactive();
         callsChanged();
       } else if (followId && !jobs?.get(followId)) {
         startFollow(null);
       }
-      return r.ok ? { ...r, linked: session !== null } : r;
-    } finally {
-      importing = false;
-    }
+      return r;
+    },
+    log: (e, f) => log.event(e, f),
+    newToken: () => randomUUID(),
+  });
+  importer = imp;
+  handle(IPC.chooseImportFile, () => imp.choose());
+  handle(IPC.discardForImport, (callId) => imp.discard(text(callId)));
+  handle(IPC.runImport, (token, layout) => imp.run(text(token), layout === "left-ta" || layout === "right-ta" ? layout : "mixed"));
+  ipcMain.on(IPC.cancelImport, (event) => {
+    if (fromOwnPage(event)) imp.cancel();
   });
   handle(IPC.speakerPreview, (id) => jobs?.speakerPreview(text(id)) ?? null);
   handle(IPC.chooseSpeakers, async (id, choice) => {
@@ -964,9 +951,16 @@ function registerIpc(c: RecorderController): void {
 }
 
 
-/** D-171: decode an import copy again (a retry after its temp audio was deleted). */
-async function redecodeImport(client: DecoderClient, file: string, outDir: string, id: string, forceMono: boolean): Promise<void> {
-  await decodeFileToPcm(client, new Uint8Array(await readFile(file)), outDir, id, { forceMono });
+/** D-171: decode an import copy again (a retry after its temp audio was deleted), the way the TA chose. */
+async function redecodeImport(client: DecoderClient, file: string, outDir: string, id: string): Promise<void> {
+  let layout: "left-ta" | "right-ta" | "mixed" = "mixed";
+  try {
+    const meta = JSON.parse(await readFile(join(outDir, `${id}.call.json`), "utf8")) as { layout?: unknown };
+    if (meta.layout === "left-ta" || meta.layout === "right-ta") layout = meta.layout;
+  } catch {
+    // no call file: the mixed (mono) way, which never puts the same words under both speakers
+  }
+  await decodeFileToPcm(client, new Uint8Array(await readFile(file)), extname(file), outDir, id, { layout });
 }
 
 main();

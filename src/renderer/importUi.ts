@@ -1,10 +1,10 @@
 // D-171 "Import a recording" in the recorder window: the import dialog (pick a file, see the progress) and the
 // "Which voice is yours?" dialog of a mono import. Main does the work (src/main/importFlow.ts); the page never
 // sees a file path, only the name the TA picked.
-import type { ImportPick, SpeakerPreviewView } from "../main/ipcTypes";
+import type { ImportLayout, ImportPick, SpeakerPreviewView } from "../main/ipcTypes";
 import { api } from "./bridge";
 import { formatElapsed } from "./elapsedClock";
-import { importDone, speakerSendLabel } from "./importText";
+import { importDone, layoutDefault, layoutHint, speakerSendLabel } from "./importText";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -13,6 +13,8 @@ export interface ImportHost {
   liveLinked(): boolean;
   /** Stop and delete the live Solace recording so the import takes its session. */
   discardLive(): Promise<boolean>;
+  /** Why the last discardLive() failed, if it did. */
+  lastError(): string | null;
   afterImport(): void;
 }
 
@@ -29,11 +31,23 @@ function status(id: string, kind: "pass" | "notyet" | "", text: string): void {
 const mmss = (ms: number) => formatElapsed(ms).replace(/^00:/, "");
 
 // ---------------------------------------------------------------- import dialog
+// Step 1: choose a file (main reads it, not decodes it: type, size, length ≤ 2 h, channels).
+// Step 2: for a two-channel file, how it is laid out (review R3 I3). Then Import: only now is a live Solace
+// recording replaced, and the import runs. Closing the dialog ends the attempt (review R3 I1).
+let pick: Extract<ImportPick, { ok: true }> | null = null;
+
+function resetDialog(): void {
+  pick = null;
+  $("import-picked").hidden = true;
+  ($("import-choose") as HTMLButtonElement).hidden = false;
+  ($("import-choose") as HTMLButtonElement).disabled = false;
+  ($("import-run") as HTMLButtonElement).hidden = true;
+}
+
 export function openImportDialog(): void {
   if (busy) return;
+  resetDialog();
   $("import-live-warning").hidden = !host.liveLinked();
-  ($("import-mixed") as HTMLInputElement).checked = false;
-  ($("import-choose") as HTMLButtonElement).disabled = false;
   $("import-close").textContent = "Cancel";
   status("import-status", "", "");
   $("import-dialog").hidden = false;
@@ -43,26 +57,45 @@ export function openImportDialog(): void {
 function closeImportDialog(): void {
   if (busy) return;
   $("import-dialog").hidden = true;
+  resetDialog();
+  api().cancelImport();
 }
 
-async function chooseAndImport(): Promise<void> {
+async function choose(): Promise<void> {
   if (busy) return;
-  const pick: ImportPick = await api().chooseImportFile();
-  if (!pick.ok) {
-    if (!pick.cancelled) status("import-status", "notyet", pick.message ?? "This file can't be imported.");
+  const p: ImportPick = await api().chooseImportFile();
+  if (!p.ok) {
+    if (!p.cancelled) status("import-status", "notyet", p.message ?? "This file can't be imported.");
     return;
   }
+  pick = p;
+  $("import-file").textContent = `${p.name} · ${mmss(p.durationMs)} · ${p.sizeMb} MB · ${p.channels === 1 ? "one channel" : `${p.channels} channels`}`;
+  const twoChannels = p.channels >= 2;
+  $("import-layout").hidden = !twoChannels;
+  if (twoChannels) {
+    const def = layoutDefault(p.looksLikeAppFile);
+    document.querySelectorAll<HTMLInputElement>('input[name="import-layout"]').forEach((r) => (r.checked = r.value === def));
+    $("import-layout-hint").textContent = layoutHint(p.looksLikeAppFile);
+  }
+  $("import-picked").hidden = false;
+  ($("import-choose") as HTMLButtonElement).hidden = true;
+  ($("import-run") as HTMLButtonElement).hidden = false;
+  status("import-status", "", p.forLive ? "Press Import: the live recording stops and is deleted, then the file is imported for this Solace call." : "Press Import.");
+}
+
+async function runChosen(): Promise<void> {
+  if (busy || !pick) return;
+  const p = pick;
+  const layout = (p.channels >= 2 ? document.querySelector<HTMLInputElement>('input[name="import-layout"]:checked')?.value : "mixed") as ImportLayout | undefined;
   busy = true;
-  ($("import-choose") as HTMLButtonElement).disabled = true;
+  ($("import-run") as HTMLButtonElement).disabled = true;
   ($("import-close") as HTMLButtonElement).disabled = true;
   try {
-    status("import-status", "", `${pick.name} (${pick.sizeMb} MB)`);
-    const linked = host.liveLinked();
-    if (linked && !(await host.discardLive())) {
-      status("import-status", "notyet", "The live recording could not be replaced. Stop it, then try again.");
+    if (p.forLive && !(await host.discardLive())) {
+      status("import-status", "notyet", host.lastError() ?? "The live recording could not be replaced. Press Call & record in Solace again.");
       return;
     }
-    const r = await api().runImport(pick.token, ($("import-mixed") as HTMLInputElement).checked);
+    const r = await api().runImport(p.token, layout ?? "mixed");
     if (r.ok) {
       status("import-status", "pass", importDone(r, r.linked));
       $("import-close").textContent = "Close";
@@ -72,8 +105,13 @@ async function chooseAndImport(): Promise<void> {
     }
   } finally {
     busy = false;
-    ($("import-choose") as HTMLButtonElement).disabled = false;
+    pick = null;
+    $("import-picked").hidden = true;
+    ($("import-run") as HTMLButtonElement).hidden = true;
+    ($("import-run") as HTMLButtonElement).disabled = false;
+    ($("import-choose") as HTMLButtonElement).hidden = false;
     ($("import-close") as HTMLButtonElement).disabled = false;
+    $("import-live-warning").hidden = !host.liveLinked();
   }
 }
 
@@ -92,7 +130,10 @@ function chunkElement(c: SpeakerPreviewView["chunks"][number], many: boolean): H
     list.append(li);
   }
   if (!c.turns.length) list.append(Object.assign(document.createElement("li"), { textContent: "(no speech found in this part)" }));
-  box.append(h, list);
+  box.append(h);
+  if (c.unclear) box.append(Object.assign(document.createElement("p"), { className: "doubt", textContent: "This part could not be transcribed. It shows as [không nghe rõ] in the transcript." }));
+  else if (c.unsure && many) box.append(Object.assign(document.createElement("p"), { className: "doubt", textContent: "Check this part: the letters may be the other way round." }));
+  box.append(list);
   if (many) {
     const label = document.createElement("label");
     label.className = "checkbox";
@@ -152,7 +193,8 @@ async function sendChoice(): Promise<void> {
 export function initImportUi(h: ImportHost): void {
   host = h;
   $("import-close").addEventListener("click", closeImportDialog);
-  $("import-choose").addEventListener("click", () => void chooseAndImport());
+  $("import-choose").addEventListener("click", () => void choose());
+  $("import-run").addEventListener("click", () => void runChosen());
   api().onImportProgress((step) => status("import-status", "", step));
   $("speakers-close").addEventListener("click", () => ($("speakers-dialog").hidden = true));
   $("speakers-send").addEventListener("click", () => void sendChoice());

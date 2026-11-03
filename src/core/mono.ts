@@ -13,13 +13,13 @@ import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { writeFileAtomic } from "./atomicWrite";
 import {
-  alignChunks, applySpeakers, DIARIZE_PROMPT, mergeChunkTurns, parseLabelledTurns, planChunks,
-  type Chunk, type SpeakerChoice, type SpeakersData,
+  alignChunks, applySpeakers, DIARIZE_PROMPT, MONO_OVERLAP_MS, mergeChunkTurns, overlapEvidence, parseLabelledTurns, planChunks,
+  type Chunk, type ChunkTurn, type SpeakerChoice, type SpeakersData,
 } from "./diarize";
 import { transcribeSegment, type GeminiDeps } from "./gemini";
 import { isoOffsetMinutes } from "./pipeline";
 import type { FailureReason, Job, StepOutcome } from "./queue";
-import { buildTranscriptFile, sanitiseTurnText, writeTranscriptFiles } from "./transcript";
+import { buildTranscriptFile, sanitiseTurnText, UNCLEAR_SEGMENT_TEXT, writeTranscriptFiles } from "./transcript";
 import type { PcmReader } from "./vad";
 import { encodeWav } from "./wav";
 
@@ -89,7 +89,7 @@ async function transcribeChunks(deps: MonoDeps, job: Job, apiKey: string, reader
   const model = deps.getModel();
   const checkpoint = await loadCheckpoint(job, model);
   const chunks: Chunk[] = planChunks((reader.length / sr) * 1000);
-  let unclear = 0;
+  const refused = new Set<number>();
   for (const c of chunks) {
     if (String(c.index) in checkpoint.done) continue;
     const a = Math.round((c.start_ms / 1000) * sr);
@@ -111,20 +111,29 @@ async function transcribeChunks(deps: MonoDeps, job: Job, apiKey: string, reader
     } else if (r.kind === "model_not_found" || r.kind === "bad_model") {
       return final("gemini_model_not_found");
     } else {
-      unclear++; // a 400 for this chunk: not checkpointed, so a retry asks again
+      // A 400 for this part (review R3 m1): it is not asked again; it becomes one "[không nghe rõ]" turn, and
+      // the voice dialog says this part could not be transcribed.
+      refused.add(c.index);
       continue;
     }
     await writeFileAtomic(progressPath(job), JSON.stringify(checkpoint));
   }
-  if (unclear > 0 && unclear * 2 >= chunks.length) return final("gemini_bad_request");
+  if (refused.size > 0 && refused.size * 2 >= chunks.length) return final("gemini_bad_request");
 
-  const perChunk = chunks.map((c) => parseLabelledTurns(checkpoint.done[String(c.index)] ?? "", c.start_ms, c.end_ms));
+  const perChunk = chunks.map((c) => (refused.has(c.index) ? [] : parseLabelledTurns(checkpoint.done[String(c.index)] ?? "", c.start_ms, c.end_ms)));
+  const turns: ChunkTurn[] = mergeChunkTurns(chunks.map((c, i) => ({ ...c, turns: perChunk[i] })));
+  for (const c of chunks.filter((x) => refused.has(x.index))) {
+    const next = chunks[c.index + 1];
+    turns.push({ chunk: c.index, label: "A", start_ms: c.start_ms, end_ms: next ? Math.min(c.end_ms, next.start_ms + MONO_OVERLAP_MS / 2) : c.end_ms, text: UNCLEAR_SEGMENT_TEXT, unclear: true });
+  }
+  turns.sort((a, b) => a.start_ms - b.start_ms);
   const file: SpeakersFile = {
     version: 1,
     model,
     chunks,
     flips: alignChunks(perChunk),
-    turns: mergeChunkTurns(chunks.map((c, i) => ({ ...c, turns: perChunk[i] }))),
+    unsure: overlapEvidence(perChunk).map((ok) => !ok),
+    turns,
     requests: checkpoint.requests,
     totalTokens: checkpoint.totalTokens,
   };

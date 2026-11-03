@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { callFileNames, IN_PROGRESS_DIR, partFileName, TRACKS } from "./callFiles";
 import { isValidCallId } from "./callId";
 import { writeMetaAtomic, type CallMeta } from "./callMeta";
-import { pathExists, renamePartsToFinal } from "./chunkStore";
+import { DISCARDED_FLAG, pathExists, renamePartsToFinal } from "./chunkStore";
 import { writeCallMarker } from "./coreAdapter";
 import type { LinkedSession } from "./deepLinkFlow";
 
@@ -47,6 +47,13 @@ export async function recoverLeftovers(root: string, opts: { skipCallId?: string
     if (!entry.isDirectory() || !isValidCallId(callId) || callId === opts.skipCallId) continue;
     const dir = join(base, callId);
     try {
+      // A live recording the TA replaced by an import (D-171) whose folder could not be deleted then: delete it
+      // now; it is never recovered or sent (review R3 m3).
+      if (await pathExists(join(dir, DISCARDED_FLAG))) {
+        await rm(dir, { recursive: true, force: true });
+        result.discardedEmpty += 1;
+        continue;
+      }
       let totalBytes = 0;
       let lastWrite = 0;
       for (const t of TRACKS) {
