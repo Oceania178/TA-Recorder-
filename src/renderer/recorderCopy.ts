@@ -8,7 +8,7 @@ export const NOTICE_FIRST_MESSAGE = "Open Set-up check and accept the notice fir
 export function startHint(testMode: boolean, shortcut: string): string {
   return testMode
     ? `Test mode is on: Start, the tray or ${shortcut} records a "Local only" call. It is transcribed on this laptop and never sent to Solace. Calls from Solace work as usual.`
-    : `To record a call, press "Call & record" (or "Record only, I'll call myself") on the candidate in Solace. This app starts recording by itself.`;
+    : `To record a call, press "Call & record" (or "Record only, I'll call myself") on the candidate in Solace. This app starts recording by itself. To use a recording you already have, press "Import a recording instead…" once it has started.`;
 }
 
 /** Start is the main (blue) button only when it can record: in Test mode. Otherwise the call starts in Solace. */

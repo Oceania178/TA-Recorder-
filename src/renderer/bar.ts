@@ -42,6 +42,8 @@ function render(s: StatusReport): void {
   $("bar").title = s.warning ?? "";
   $("warn").hidden = !s.warning;
   $("test-mode-badge").hidden = s.testMode !== true;
+  // D-171: during a live Solace call, "Import" replaces it with a recording file (the window asks first).
+  $("btn-import").hidden = !(s.linked === true && (s.state === "recording" || s.state === "paused"));
   if (!following) chip(s.state === "idle" ? null : s.linked);
 }
 
@@ -67,5 +69,6 @@ $("btn-retry").addEventListener("click", () => {
   api().sendBarCommand("retry");
 });
 $("btn-close").addEventListener("click", () => api().sendBarCommand("close"));
+$("btn-import").addEventListener("click", () => api().sendBarCommand("import"));
 api().onStatus(render);
 api().onFollow(renderFollow);

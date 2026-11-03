@@ -505,3 +505,55 @@ button.inline {
   font-size: 12px;
   vertical-align: baseline;
 }
+
+/* ---- D-171 Import a recording ---- */
+.import-row {
+  margin-top: 8px;
+}
+
+.import-limits {
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.speaker-me {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  display: flex;
+  gap: 16px;
+  padding: 6px 12px;
+  margin: 8px 0;
+}
+
+.speaker-chunk {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 8px 0;
+}
+
+.speaker-chunk h3 {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0 0 4px;
+}
+
+.speaker-chunk ol {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 6px;
+}
+
+.speaker-chunk li {
+  margin: 2px 0;
+}
+
+.speaker-chunk .letter {
+  font-weight: 700;
+  margin-right: 6px;
+}
+
+.speaker-chunk .letter.ta {
+  color: var(--accent);
+}

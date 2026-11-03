@@ -5,7 +5,7 @@ declare global {
   interface Window {
     recorderApi: RecorderApi;
     /** Called by main (tray, shortcuts, floating bar) through executeJavaScript with a user gesture. */
-    __taRecorderCommand?: (command: Command | "settings" | "calls") => void;
+    __taRecorderCommand?: (command: Command | "settings" | "calls" | "import" | "speakers") => void;
   }
 }
 

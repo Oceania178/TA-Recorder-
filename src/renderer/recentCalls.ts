@@ -30,9 +30,11 @@ function rowElement(r: CallRowView): HTMLLIElement {
   const head = el("div", "call-head");
   head.append(el("span", "call-when", when(r.startedAt)), el("span", `call-stage ${r.stage.toLowerCase()}`, r.stage));
   li.append(head);
-  li.append(el("p", "call-meta", `${formatElapsed(r.durationS * 1000)} · ${r.linked ? "Linked to Solace" : "Local only"} · ${r.id}`));
+  li.append(el("p", "call-meta", `${formatElapsed(r.durationS * 1000)} · ${r.linked ? "Linked to Solace" : "Local only"}${r.imported ? " · Imported" : ""} · ${r.id}`));
   if (r.detail) li.append(el("p", `call-detail${r.stage === "Failed" ? " failed" : ""}`, r.detail));
   const buttons = el("div", "buttons");
+  // D-171: a mono import waits for "Which voice is yours?" before it is sent.
+  if (r.needsSpeakers) buttons.append(Object.assign(button("Choose your voice", () => chooseVoice(r.id)), { className: "primary" }));
   if (r.canRetry) {
     const retry = button("Retry", () => {
       retry.disabled = true;
@@ -54,7 +56,10 @@ export async function refreshCalls(): Promise<void> {
   $("calls-key-warning").hidden = !rows.some((r) => r.detail === NO_KEY_DETAIL);
 }
 
-export function initRecentCalls(): void {
+let chooseVoice: (id: string) => void = () => undefined;
+
+export function initRecentCalls(onChooseVoice: (id: string) => void = () => undefined): void {
+  chooseVoice = onChooseVoice;
   api().onCallsChanged(() => void refreshCalls());
   setInterval(() => void refreshCalls(), 30_000);
   void refreshCalls();

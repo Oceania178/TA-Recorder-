@@ -11,6 +11,8 @@ import { SilenceWatch } from "./silenceWatch";
 import { LONG_CALL_STOPPED, LONG_CALL_WARNING, longCallStatus } from "./longCall";
 import { initWizard, openWizard } from "./wizard";
 import { isInCall } from "./inCall";
+import { initImportUi, openImportDialog, openSpeakerDialog } from "./importUi";
+import { importButton } from "./importText";
 import { folderBanner, isStaleNoticeMessage, NOTICE_FIRST_MESSAGE, startHint, startIsPrimary } from "./recorderCopy";
 
 const TICK_MS = 200;
@@ -67,7 +69,39 @@ function setState(next: RecorderState): void {
   ($("mic-processing") as HTMLInputElement).disabled = next !== "idle";
   ($("test-mode") as HTMLInputElement).disabled = next !== "idle";
   ($("btn-change-dir") as HTMLButtonElement).disabled = next !== "idle";
+  // D-171: "Import a recording…" (idle, Test mode) or "…instead…" (a live Solace call).
+  const imp = importButton(next, linkedNow, settings?.testMode === true);
+  const btn = $("btn-import") as HTMLButtonElement;
+  btn.hidden = !imp.visible;
+  btn.textContent = imp.label;
+  btn.disabled = !imp.enabled || !!settings?.dirProblem;
   report();
+}
+
+/** D-171: the TA replaces this live Solace recording by an imported file: stop it, delete it, keep the session. */
+async function discardForImport(): Promise<boolean> {
+  if ((state !== "recording" && state !== "paused") || !session || !callId || linkedNow !== true) return false;
+  const id = callId;
+  const s = session;
+  setState("stopping");
+  try {
+    await s.stop();
+  } catch {
+    // the recording is thrown away anyway
+  }
+  await Promise.all(Object.values(chains)).catch(() => undefined);
+  const r = await api().discardForImport(id);
+  session = null;
+  callId = null;
+  levels = [0, 0];
+  warning = null;
+  linkedNow = null;
+  clock.reset();
+  setState("idle");
+  showLinkState(null);
+  updateMeters();
+  showMessage(r.ok ? "The live recording was stopped and deleted. The imported file is used for this Solace call." : (r.message ?? "The live recording could not be replaced."), r.ok ? "info" : "error");
+  return r.ok;
 }
 
 function report(): void {
@@ -288,6 +322,8 @@ function runCommand(cmd: string): void {
   else if (cmd === "resume") void resume();
   else if (cmd === "settings") $("settings").scrollIntoView({ behavior: "smooth" });
   else if (cmd === "calls") $("calls").scrollIntoView({ behavior: "smooth" });
+  else if (cmd === "import") openImportDialog();
+  else if (cmd === "speakers") void openSpeakerDialog();
 }
 
 async function init(): Promise<void> {
@@ -317,7 +353,13 @@ async function init(): Promise<void> {
   api().onAppMessage((m) => showMessage(m.text, m.kind));
 
   renderSettings(await api().getSettings());
-  initRecentCalls();
+  initRecentCalls((id) => void openSpeakerDialog(id));
+  initImportUi({
+    liveLinked: () => linkedNow === true && (state === "recording" || state === "paused"),
+    discardLive: discardForImport,
+    afterImport: () => void refreshCalls(),
+  });
+  $("btn-import").addEventListener("click", () => openImportDialog());
   setState("idle");
   setInterval(tick, TICK_MS);
   void refreshDevices();

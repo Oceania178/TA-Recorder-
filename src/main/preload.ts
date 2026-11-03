@@ -1,7 +1,7 @@
 // The only bridge between the recorder pages and the app. Pages get these few functions, nothing else
 // (contextIsolation on, nodeIntegration off, sandboxed).
 import { contextBridge, ipcRenderer } from "electron";
-import { IPC, type AppMessage, type Command, type MicProcessing, type RecorderApi, type StatusReport, type Track } from "./ipcTypes";
+import { IPC, type AppMessage, type Command, type MicProcessing, type RecorderApi, type SpeakerChoiceView, type StatusReport, type Track } from "./ipcTypes";
 
 const api: RecorderApi = {
   beginCall: (micProcessing: MicProcessing, intent: "local" | "linked") => ipcRenderer.invoke(IPC.beginCall, micProcessing, intent),
@@ -38,7 +38,15 @@ const api: RecorderApi = {
   onAppMessage: (listener: (message: AppMessage) => void) => {
     ipcRenderer.on(IPC.appMessage, (_event, message: AppMessage) => listener(message));
   },
-  sendBarCommand: (command: Command | "open" | "retry" | "close") => ipcRenderer.send(IPC.barCommand, command),
+  sendBarCommand: (command: Command | "open" | "retry" | "close" | "import") => ipcRenderer.send(IPC.barCommand, command),
+  chooseImportFile: () => ipcRenderer.invoke(IPC.chooseImportFile),
+  discardForImport: (callId: string) => ipcRenderer.invoke(IPC.discardForImport, callId),
+  runImport: (token: string, forceMono: boolean) => ipcRenderer.invoke(IPC.runImport, token, forceMono),
+  onImportProgress: (listener: (step: string) => void) => {
+    ipcRenderer.on(IPC.importProgress, (_event, step: string) => listener(typeof step === "string" ? step : ""));
+  },
+  speakerPreview: (id: string) => ipcRenderer.invoke(IPC.speakerPreview, id),
+  chooseSpeakers: (id: string, choice: SpeakerChoiceView) => ipcRenderer.invoke(IPC.chooseSpeakers, id, choice),
   onStatus: (listener: (status: StatusReport) => void) => {
     ipcRenderer.on(IPC.statusToBar, (_event, status: StatusReport) => listener(status));
   },

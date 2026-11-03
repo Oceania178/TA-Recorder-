@@ -7,7 +7,8 @@
 import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Notification, safeStorage, shell, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile, stat } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { tmpdir, userInfo } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { createServer } from "node:http";
@@ -19,10 +20,12 @@ import { OutcomeWatcher } from "./callOutcomes";
 import { callRows, type CallRow } from "./callsView";
 import { ensureCleanupTask, keepCleanupTask, type CommandRunner } from "./cleanupTask";
 import { RecorderController } from "./controller";
-import { DecoderClient, decodeWebmToPcmFile } from "./decoderClient";
+import { DecoderClient, decodeFileToPcm, decodeWebmToPcmFile } from "./decoderClient";
+import { makeCallId } from "./callId";
+import { checkImportFile, importGate, IMPORT_MESSAGES, runImport } from "./importFlow";
 import { DecoderWindow } from "./decoderWindow";
 import { readE2eHooks } from "./e2eHooks";
-import { DeepLinkFlow, type LinkOutcome } from "./deepLinkFlow";
+import { DeepLinkFlow, type LinkedSession, type LinkOutcome } from "./deepLinkFlow";
 import { findDeepLinkArg, onDeepLink, setDeepLinkHandler } from "./deepLinkHook";
 import { createNetFetch } from "./netFetch";
 import { handleSecondInstance } from "./secondInstance";
@@ -31,7 +34,7 @@ import { showLater } from "./showLater";
 import { lastCall } from "./trayMenu";
 import { requestLocalStart } from "./startGate";
 import { IPC, type AppMessage, type Command, type RecorderState, type SettingsView, type StatusReport } from "./ipcTypes";
-import { deletePcmFiles, makeOpenPcm } from "./pcmFiles";
+import { deletePcmFiles, makeOpenMono, makeOpenPcm } from "./pcmFiles";
 import { SecretStore } from "./secretStore";
 import { applySecurityPolicy, isOwnPage } from "./security";
 import { clearGeminiKey, setGeminiKey, setGeminiModel, setSolaceAddress, setTestMode, type SettingsHost } from "./settingsActions";
@@ -99,6 +102,15 @@ let followSince = 0;
 let followHideTimer: ReturnType<typeof setTimeout> | null = null;
 const FOLLOW_FINAL_MS = 6000;
 const FOLLOW_UNQUEUED_MS = 15_000;
+/** P3 + D-171: the followed call waits for the TA's voice choice (the bar's open button opens the chooser). */
+let followNeedsSpeakers = false;
+// ---- D-171 Import a recording ----
+/** An import is being copied / decoded: no recording or other import meanwhile (one call at a time). */
+let importing = false;
+/** The Solace session of a live recording the TA replaced by an import (kept until the import is queued). */
+let importSession: LinkedSession | null = null;
+/** The file the TA picked, by an opaque token: the page never sees a path. */
+const importPicks = new Map<string, string>();
 const rendererReadyPromise = new Promise<void>((done) => (rendererReady = done));
 
 function main(): void {
@@ -284,7 +296,8 @@ async function openJobs(c: RecorderController, s: SecretStore): Promise<CallJobs
     getBaseUrl: () => c.appSettings.solaceBaseUrl,
     getModel: () => c.appSettings.geminiModel ?? DEFAULT_GEMINI_MODEL,
     fetch: netFetch,
-    openPcm: makeOpenPcm((webm, pcm) => decodeWebmToPcmFile(client, webm, pcm)),
+    openPcm: makeOpenPcm((webm, pcm) => decodeWebmToPcmFile(client, webm, pcm), (file, outDir, id) => redecodeImport(client, file, outDir, id, false)),
+    openMono: makeOpenMono((file, outDir, id) => redecodeImport(client, file, outDir, id, true)),
     afterTranscript: (job) => deletePcmFiles(job.folder, job.id),
     appVersion: app.getVersion(),
     dev: DEV,
@@ -348,13 +361,14 @@ function wireDeepLinks(c: RecorderController): void {
   if (!s) return;
   const flow = new DeepLinkFlow({
     noticeAccepted: () => c.noticeAccepted(),
-    isRecording: () => c.guard.isActive,
+    isRecording: () => c.guard.isActive || importing,
     getBaseUrl: () => c.appSettings.solaceBaseUrl,
     checkTicket: (baseUrl, sessionId, ticket) => checkTicket({ fetch: netFetch, dev: DEV }, baseUrl, sessionId, ticket),
     tickets: { held: (id) => s.heldTicket(id), save: (id, ticket, held) => s.saveTicket(id, ticket, held) },
     alreadyRecorded: (id) => c.hasCall(id) || !!jobs?.get(id),
     start: (session) => {
       c.armLinkedCall(session);
+      importSession = null; // a new Solace call: an earlier, unused import session is dropped
       // P2: Solace stays in front; the floating bar shows the recording. A failed start shows the window.
       linkWindow.linkStarted();
       if (linkTimer) clearTimeout(linkTimer);
@@ -410,12 +424,12 @@ async function refreshCallViews(): Promise<void> {
   if (SMOKE) return;
   const rows = await currentRows().catch(() => null);
   if (!rows) return;
-  for (const o of outcomes.update(rows)) notifyOutcome(o.title, o.body);
+  for (const o of outcomes.update(rows)) notifyOutcome(o.title, o.body, o.outcome === "choose" ? "speakers" : "calls");
   tray?.setLastCall(lastCall(rows));
   updateFollow(rows);
 }
 
-function notifyOutcome(title: string, body: string): void {
+function notifyOutcome(title: string, body: string, opens: "calls" | "speakers" = "calls"): void {
   if (!Notification.isSupported()) return;
   const n = new Notification({ title, body, silent: true });
   liveNotifications.add(n);
@@ -423,7 +437,7 @@ function notifyOutcome(title: string, body: string): void {
   n.on("click", () => {
     done();
     showRecorder();
-    if (recorderWin) sendCommandToRecorder(recorderWin, "calls");
+    if (recorderWin) sendCommandToRecorder(recorderWin, opens);
   });
   n.on("close", done);
   showLater(() => n.show());
@@ -460,6 +474,7 @@ function clearFollow(): void {
 function updateFollow(rows: CallRow[]): void {
   if (!followId || controller?.guard.isActive) return;
   const row = rows.find((r) => r.id === followId);
+  followNeedsSpeakers = row?.needsSpeakers === true;
   if (!row && Date.now() - followSince > FOLLOW_UNQUEUED_MS) return clearFollow();
   const view = followView(row);
   sendFollow(view);
@@ -609,7 +624,7 @@ export function requestStart(): void {
   requestLocalStart({
     noticeAccepted: () => c.noticeAccepted(),
     testMode: () => c.appSettings.testMode,
-    isRecording: () => c.guard.isActive,
+    isRecording: () => c.guard.isActive || importing,
     disarm: () => c.disarm(),
     start: () => {
       if (recorderWin) sendCommandToRecorder(recorderWin, "start");
@@ -720,6 +735,7 @@ function registerIpc(c: RecorderController): void {
   const text = (v: unknown) => (typeof v === "string" ? v : "");
 
   handle(IPC.beginCall, (mic, intent) => {
+    if (importing) return { ok: false, message: IMPORT_MESSAGES.busy };
     const m = (mic ?? {}) as Record<string, unknown>;
     const micProcessing = { echoCancellation: m.echoCancellation === true, noiseSuppression: m.noiseSuppression === true, autoGainControl: m.autoGainControl === true };
     return c.beginCall(micProcessing, intent === "linked" ? "linked" : "local");
@@ -786,6 +802,98 @@ function registerIpc(c: RecorderController): void {
 
   // Recent calls.
   handle(IPC.listCalls, () => currentRows());
+
+  // D-171 Import a recording.
+  handle(IPC.chooseImportFile, async () => {
+    const live = c.liveSession !== null && (c.guard.state === "recording" || c.guard.state === "paused");
+    const gate = importGate({
+      noticeAccepted: c.noticeAccepted(),
+      testMode: c.appSettings.testMode,
+      linked: live || importSession !== null,
+      busy: importing || (c.guard.isActive && !live),
+    });
+    if (gate) return { ok: false, message: gate };
+    let file = E2E?.importFile ?? null;
+    if (!file) {
+      if (!recorderWin) return { ok: false, cancelled: true };
+      const picked = await dialog.showOpenDialog(recorderWin, {
+        title: "Choose a recording to import",
+        properties: ["openFile"],
+        filters: [{ name: "Recordings (MP3, M4A, WAV, WebM, OGG)", extensions: ["mp3", "m4a", "wav", "webm", "ogg", "opus"] }],
+      });
+      if (picked.canceled || !picked.filePaths[0]) return { ok: false, cancelled: true };
+      file = picked.filePaths[0];
+    }
+    let size = 0;
+    try {
+      const st = await stat(file);
+      size = st.isFile() ? st.size : 0;
+    } catch {
+      return { ok: false, message: IMPORT_MESSAGES.unreadable };
+    }
+    const check = checkImportFile({ name: basename(file), size });
+    if (!check.ok) return { ok: false, message: check.message };
+    importPicks.clear();
+    const token = randomUUID();
+    importPicks.set(token, file);
+    return { ok: true, token, name: basename(file), sizeMb: Math.max(0.1, Math.round((size / 1048576) * 10) / 10) };
+  });
+  handle(IPC.discardForImport, async (callId) => {
+    const session = await c.takeLiveSessionForImport(callId);
+    if (!session) return { ok: false, message: "There is no Solace recording to replace." };
+    importSession = session;
+    log.event("import.live_discarded", {});
+    return { ok: true };
+  });
+  handle(IPC.runImport, async (token, forceMono) => {
+    const file = typeof token === "string" ? importPicks.get(token) : undefined;
+    if (!file) return { ok: false, message: "Choose the file again." };
+    const gate = importGate({ noticeAccepted: c.noticeAccepted(), testMode: c.appSettings.testMode, linked: importSession !== null, busy: importing || c.guard.isActive });
+    if (gate) return { ok: false, message: gate };
+    const client = decoder;
+    const j = jobs;
+    if (!client || !j) return { ok: false, message: "The transcription queue is not open. Restart the app, then import again." };
+    importing = true;
+    const session = importSession;
+    try {
+      const r = await runImport({
+        root: c.recordingsDir(),
+        dirProblem: () => c.dirProblem(),
+        hasCall: (id) => c.hasCall(id) || !!j.get(id),
+        newLocalId: () => makeCallId(new Date()),
+        now: () => Date.now(),
+        tzOffsetMinutes: (ms) => -new Date(ms).getTimezoneOffset(),
+        appVersion: app.getVersion(),
+        decode: async (f, outDir, id, mono) => decodeFileToPcm(client, new Uint8Array(await readFile(f)), outDir, id, { forceMono: mono }),
+        enqueue: async (call) => {
+          startFollow(call.id);
+          await j.enqueue(call);
+          void j.drain();
+        },
+        progress: (step) => {
+          if (recorderWin && !recorderWin.isDestroyed()) recorderWin.webContents.send(IPC.importProgress, step);
+        },
+      }, { source: file, session, forceMono: forceMono === true });
+      log.event("import.done", { ok: r.ok, audio: r.ok ? r.audio : null, linked: session !== null, file_time: r.ok ? r.fromFileTime : null });
+      if (r.ok) {
+        importSession = null;
+        importPicks.clear();
+        if (barWin && !barWin.isDestroyed() && !barWin.isVisible()) barWin.showInactive();
+        callsChanged();
+      } else if (followId && !jobs?.get(followId)) {
+        startFollow(null);
+      }
+      return r.ok ? { ...r, linked: session !== null } : r;
+    } finally {
+      importing = false;
+    }
+  });
+  handle(IPC.speakerPreview, (id) => jobs?.speakerPreview(text(id)) ?? null);
+  handle(IPC.chooseSpeakers, async (id, choice) => {
+    const ok = (await jobs?.chooseSpeakers(text(id), choice as never)) ?? false;
+    if (ok) callsChanged();
+    return ok;
+  });
   handle(IPC.retryCall, async (id) => {
     if (typeof id === "string") await jobs?.retry(id);
   });
@@ -843,11 +951,22 @@ function registerIpc(c: RecorderController): void {
   });
   ipcMain.on(IPC.barCommand, (event, cmd: unknown) => {
     if (!fromOwnPage(event)) return;
-    if (cmd === "open") showRecorder();
-    else if (cmd === "pause" || cmd === "resume" || cmd === "stop") command(cmd);
+    if (cmd === "open") {
+      showRecorder();
+      if (followNeedsSpeakers && recorderWin) sendCommandToRecorder(recorderWin, "speakers");
+    } else if (cmd === "import") {
+      showRecorder();
+      if (recorderWin) sendCommandToRecorder(recorderWin, "import");
+    } else if (cmd === "pause" || cmd === "resume" || cmd === "stop") command(cmd);
     else if (cmd === "close") clearFollow();
     else if (cmd === "retry" && followId) void jobs?.retry(followId);
   });
+}
+
+
+/** D-171: decode an import copy again (a retry after its temp audio was deleted). */
+async function redecodeImport(client: DecoderClient, file: string, outDir: string, id: string, forceMono: boolean): Promise<void> {
+  await decodeFileToPcm(client, new Uint8Array(await readFile(file)), outDir, id, { forceMono });
 }
 
 main();

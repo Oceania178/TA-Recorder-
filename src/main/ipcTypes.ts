@@ -86,6 +86,27 @@ export interface CallRowView {
   imported: boolean;
 }
 
+/** D-171: the file the TA picked for "Import a recording". The page sees its name only, never its path. */
+export type ImportPick =
+  | { ok: true; token: string; name: string; sizeMb: number }
+  | { ok: false; cancelled?: boolean; message?: string };
+
+/** D-171: how an import ended. */
+export type ImportRunResult =
+  | { ok: true; id: string; audio: "stereo" | "mono"; fromFileTime: boolean; durationMs: number; linked: boolean }
+  | { ok: false; message: string };
+
+/** D-171: the first turns of each chunk of a mono import (core/diarize.ts SpeakerPreview). */
+export interface SpeakerPreviewView {
+  chunks: { index: number; start_ms: number; end_ms: number; flipped: boolean; turns: { label: "A" | "B"; start_ms: number; text: string }[] }[];
+}
+
+/** D-171: the TA's answer to "Which voice is yours?". */
+export interface SpeakerChoiceView {
+  me: "A" | "B";
+  swapped: number[];
+}
+
 /** A message from main for the recorder window (e.g. why a Solace link did not start a recording). */
 export interface AppMessage {
   kind: "info" | "error" | "ok" | "warn";
@@ -118,6 +139,14 @@ export interface RecorderApi {
   openCallFolder(id: string): Promise<void>;
   openTranscript(id: string): Promise<boolean>;
   onCallsChanged(listener: () => void): void;
+  // D-171 Import a recording
+  chooseImportFile(): Promise<ImportPick>;
+  /** Stop and delete the live Solace recording so its session takes the import instead. */
+  discardForImport(callId: string): Promise<{ ok: boolean; message?: string }>;
+  runImport(token: string, forceMono: boolean): Promise<ImportRunResult>;
+  onImportProgress(listener: (step: string) => void): void;
+  speakerPreview(id: string): Promise<SpeakerPreviewView | null>;
+  chooseSpeakers(id: string, choice: SpeakerChoiceView): Promise<boolean>;
   // First-run wizard (D-132)
   acceptNotice(): Promise<SettingsView>;
   finishWizard(): Promise<SettingsView>;
@@ -126,7 +155,7 @@ export interface RecorderApi {
   onShowWizard(listener: () => void): void;
   onAppMessage(listener: (message: AppMessage) => void): void;
   /** Floating bar buttons. */
-  sendBarCommand(command: Command | "open" | "retry" | "close"): void;
+  sendBarCommand(command: Command | "open" | "retry" | "close" | "import"): void;
   /** Floating bar display. */
   onStatus(listener: (status: StatusReport) => void): void;
 }
@@ -158,6 +187,12 @@ export const IPC = {
   openCallFolder: "calls:open-folder",
   openTranscript: "calls:open-transcript",
   callsChanged: "calls:changed",
+  chooseImportFile: "import:choose",
+  discardForImport: "import:discard",
+  runImport: "import:run",
+  importProgress: "import:progress",
+  speakerPreview: "speakers:preview",
+  chooseSpeakers: "speakers:choose",
   acceptNotice: "wizard:accept-notice",
   finishWizard: "wizard:finish",
   openMicSettings: "wizard:open-mic-settings",

@@ -294,6 +294,24 @@ export class RecorderController {
     }
   }
 
+  /**
+   * D-171: the TA chose "Import a recording" instead of this live Solace recording. The live recording is
+   * deleted (nothing of it is kept or sent) and its Solace session is handed to the import. Null when the
+   * call is not a live Solace recording.
+   */
+  async takeLiveSessionForImport(callId: unknown): Promise<LinkedSession | null> {
+    const w = this.writerFor(callId);
+    const session = this.writerSession;
+    if (!w || !session) return null;
+    await this.abortCall(callId);
+    return session;
+  }
+
+  /** The live recording is linked to a Solace session (D-171: it may be replaced by an import). */
+  get liveSession(): LinkedSession | null {
+    return this.writer ? this.writerSession : null;
+  }
+
   async abortCall(callId: unknown): Promise<void> {
     const w = this.writerFor(callId);
     if (!w) return;

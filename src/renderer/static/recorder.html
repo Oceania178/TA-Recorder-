@@ -34,6 +34,9 @@
           <button id="btn-pause" type="button" disabled>Pause</button>
           <button id="btn-stop" class="danger" type="button" disabled>Stop</button>
         </div>
+        <div class="buttons import-row">
+          <button id="btn-import" type="button" hidden>Import a recording…</button>
+        </div>
 
         <p class="shortcuts">
           <kbd id="shortcut-record">Ctrl+Alt+R</kbd> start / stop · <kbd id="shortcut-pause">Ctrl+Alt+P</kbd> pause / resume
@@ -145,6 +148,56 @@
         </p>
       </section>
     </main>
+
+    <!-- D-171 Import a recording -->
+    <div class="wizard-backdrop" id="import-dialog" hidden>
+      <section class="wizard card" role="dialog" aria-modal="true" aria-labelledby="import-title">
+        <header>
+          <h2 id="import-title" tabindex="-1">Import a recording</h2>
+          <button id="import-close" type="button">Cancel</button>
+        </header>
+        <p>Use a recording you already have (phone, Sound Recorder, or an older file of this app) instead of recording live. It is transcribed on this laptop and sent like a live call.</p>
+        <ul class="import-limits">
+          <li>MP3, M4A, WAV, WebM or OGG, up to 2 hours (250 MB).</li>
+          <li>The file is copied into the recordings folder and deleted after 3 days. The original is not changed.</li>
+          <li>A stereo file of this app: left = you, right = the candidate. Any other file: Gemini tells the two voices apart, then you choose which one is yours.</li>
+          <li>Two voices only. The call's time is taken from the file when possible.</li>
+        </ul>
+        <p class="message warn" id="import-live-warning" hidden>The live recording of this Solace call stops and is deleted. The imported file is sent to Solace for this call instead.</p>
+        <label class="field checkbox">
+          <input type="checkbox" id="import-mixed" />
+          <span>
+            Both voices are on both channels
+            <small>Tick this for a stereo file that is not from TA Call Recorder (e.g. a phone recorder app). Gemini then tells the two voices apart.</small>
+          </span>
+        </label>
+        <p class="wizard-status" id="import-status" role="status"></p>
+        <div class="buttons left">
+          <button id="import-choose" class="primary" type="button">Choose a file…</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="wizard-backdrop" id="speakers-dialog" hidden>
+      <section class="wizard card" role="dialog" aria-modal="true" aria-labelledby="speakers-title">
+        <header>
+          <h2 id="speakers-title" tabindex="-1">Which voice is yours?</h2>
+          <button id="speakers-close" type="button">Later</button>
+        </header>
+        <p>Gemini told the two voices apart and called them A and B. Read the first lines and choose the letter of your own voice.</p>
+        <fieldset class="speaker-me">
+          <legend>My voice is</legend>
+          <label><input type="radio" name="speaker-me" value="A" checked /> A</label>
+          <label><input type="radio" name="speaker-me" value="B" /> B</label>
+        </fieldset>
+        <div id="speakers-chunks"></div>
+        <p class="hint">The letters are Gemini's guess. If a part shows them the other way round, tick "Swap A and B in this part". Nothing is sent before you press the button below.</p>
+        <p class="wizard-status" id="speakers-status" role="status"></p>
+        <div class="buttons left">
+          <button id="speakers-send" class="primary" type="button">Send to Solace</button>
+        </div>
+      </section>
+    </div>
 
     <div class="wizard-backdrop" id="wizard" hidden>
       <section class="wizard card" role="dialog" aria-modal="true" aria-labelledby="wizard-title">
